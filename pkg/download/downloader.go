@@ -108,8 +108,8 @@ func (d *Downloader) downloadOcMirror(version string) error {
 
 // downloadButane 下载 butane 工具
 func (d *Downloader) downloadButane() error {
-	// 获取系统架构
-	arch := d.getSystemArch()
+	// 获取适用于 butane 的系统架构
+	arch := d.getSystemArchForButane()
 	
 	// 构造下载URL和文件名
 	fileName := fmt.Sprintf("butane-%s", arch)
@@ -119,6 +119,8 @@ func (d *Downloader) downloadButane() error {
 	
 	return d.downloadFile(butaneURL, butanePath)
 }
+
+
 
 // downloadMirrorRegistry 下载 Quay 镜像仓库安装包
 func (d *Downloader) downloadMirrorRegistry() error {
@@ -144,6 +146,35 @@ func (d *Downloader) getSystemArch() string {
 		return "x86_64"
 	}
 }
+
+func (d *Downloader) getSystemArchForButane() string {
+	arch := runtime.GOARCH
+	os := runtime.GOOS
+	
+	// 根据操作系统和架构返回对应的文件名后缀
+	switch os {
+	case "linux":
+		switch arch {
+		case "amd64":
+			return "amd64"
+		case "arm64":
+			return "aarch64"
+		case "ppc64le":
+			return "ppc64le"
+		case "s390x":
+			return "s390x"
+		default:
+			return "amd64" // 默认
+		}
+	case "darwin":
+		return "darwin-amd64"
+	case "windows":
+		return "windows-amd64.exe"
+	default:
+		return "amd64" // 默认返回 Linux amd64
+	}
+}
+
 
 // extractMajorVersion 提取主版本号
 func (d *Downloader) extractMajorVersion(version string) string {
@@ -319,7 +350,7 @@ func (d *Downloader) extractTools(version string) error {
 	}
 
 	// 复制 butane 工具
-	arch := d.getSystemArch()
+	arch := d.getSystemArchForButane()
 	butaneSrcPath := filepath.Join(d.downloadDir, fmt.Sprintf("butane-%s", arch))
 	butaneDstPath := filepath.Join(binDir, "butane")
 	if err := d.copyFile(butaneSrcPath, butaneDstPath); err != nil {
