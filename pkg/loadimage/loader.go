@@ -2,7 +2,9 @@ package loadimage
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +75,12 @@ func NewImageLoader(clusterName, projectRoot string) (*ImageLoader, error) {
 // LoadImages 加载镜像到 registry (包含 save 和 load 两个步骤)
 func (l *ImageLoader) LoadImages() error {
 	fmt.Println("=== 开始镜像加载流程 ===")
+	
+	// 步骤0: 检查和处理 pull-secret
+	fmt.Println("步骤0: 检查 pull-secret...")
+	if err := l.HandlePullSecret(); err != nil {
+		return fmt.Errorf("处理 pull-secret 失败: %v", err)
+	}
 	
 	// 步骤1: Save - 使用 oc-mirror 保存镜像到磁盘
 	fmt.Println("步骤1: 保存镜像到磁盘...")
@@ -236,14 +244,10 @@ func (l *ImageLoader) runOcMirrorSave(configPath, imagesDir string) error {
 	}
 	
 	// 构建 oc-mirror 命令
-	// oc-mirror --v2 --config=imageset-config-save.yaml file://. --parallel-images 4 --retry-delay 10s --retry-times 3
+	// oc-mirror --config=imageset-config-save.yaml file://images
 	args := []string{
-		"--v2",
 		fmt.Sprintf("--config=%s", configPath),
 		fmt.Sprintf("file://%s", imagesDir),
-		"--parallel-images", "4",
-		"--retry-delay", "10s",
-		"--retry-times", "3",
 	}
 	
 	fmt.Printf("执行命令: %s %v\n", ocMirrorPath, args)
@@ -260,7 +264,7 @@ func (l *ImageLoader) runOcMirrorSave(configPath, imagesDir string) error {
 			fmt.Printf("   ImageSet 配置文件已生成: %s\n", configPath)
 			fmt.Printf("   请在目标 Linux 系统上手动执行以下命令:\n")
 			fmt.Printf("   cd %s\n", l.ClusterDir)
-			fmt.Printf("   oc-mirror --v2 --config=%s file://%s --parallel-images 4 --retry-delay 10s --retry-times 3\n", 
+			fmt.Printf("   oc-mirror --config=%s file://%s\n", 
 				filepath.Base(configPath), filepath.Base(imagesDir))
 			return nil // 不返回错误，允许继续执行
 		}
@@ -303,4 +307,97 @@ func (l *ImageLoader) PushImages(imagePath string) error {
 func (l *ImageLoader) GenerateImageManifest() error {
 	// TODO: 实现镜像清单生成
 	return nil
+}
+
+// HandlePullSecret 处理 pull-secret 文件
+func (l *ImageLoader) HandlePullSecret() error {
+	// 检查 pull-secret.txt 是否存在于集群目录
+	pullSecretPath := filepath.Join(l.ClusterDir, "pull-secret.txt")
+	
+	if _, err := os.Stat(pullSecretPath); os.IsNotExist(err) {
+		return fmt.Errorf(`pull-secret.txt 文件不存在
+
+请按照以下步骤获取 pull-secret:
+1. 访问 https://console.redhat.com/openshift/install/pull-secret
+2. 登录您的 Red Hat 账户
+3. 下载 pull-secret 文件
+4. 将文件保存为: %s
+
+pull-secret 文件格式应该是 JSON 格式，包含 Red Hat 镜像仓库的认证信息`, pullSecretPath)
+	}
+	
+	fmt.Printf("✅ 找到 pull-secret 文件: %s\n", pullSecretPath)
+	
+	// 验证 pull-secret 文件格式
+	if err := l.validatePullSecret(pullSecretPath); err != nil {
+		return fmt.Errorf("pull-secret 文件格式验证失败: %v", err)
+	}
+	
+	// 复制到集群 registry 目录
+	registryDir := filepath.Join(l.ClusterDir, "registry")
+	if err := os.MkdirAll(registryDir, 0755); err != nil {
+		return fmt.Errorf("创建 registry 目录失败: %v", err)
+	}
+	
+	registryPullSecretPath := filepath.Join(registryDir, "pull-secret.json")
+	if err := l.copyFile(pullSecretPath, registryPullSecretPath); err != nil {
+		return fmt.Errorf("复制 pull-secret 到 registry 目录失败: %v", err)
+	}
+	
+	fmt.Printf("✅ pull-secret 已复制到: %s\n", registryPullSecretPath)
+	
+	// 复制到 Docker 配置目录
+	dockerConfigDir := filepath.Join(os.Getenv("HOME"), ".docker")
+	if err := os.MkdirAll(dockerConfigDir, 0755); err != nil {
+		return fmt.Errorf("创建 Docker 配置目录失败: %v", err)
+	}
+	
+	dockerConfigPath := filepath.Join(dockerConfigDir, "config.json")
+	if err := l.copyFile(pullSecretPath, dockerConfigPath); err != nil {
+		return fmt.Errorf("复制 pull-secret 到 Docker 配置目录失败: %v", err)
+	}
+	
+	fmt.Printf("✅ pull-secret 已复制到: %s\n", dockerConfigPath)
+	
+	return nil
+}
+
+// validatePullSecret 验证 pull-secret 文件格式
+func (l *ImageLoader) validatePullSecret(filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("读取文件失败: %v", err)
+	}
+	
+	// 尝试解析 JSON
+	var pullSecret map[string]interface{}
+	if err := json.Unmarshal(content, &pullSecret); err != nil {
+		return fmt.Errorf("pull-secret 不是有效的 JSON 格式: %v", err)
+	}
+	
+	// 检查是否包含 auths 字段
+	if _, exists := pullSecret["auths"]; !exists {
+		return fmt.Errorf("pull-secret 缺少 'auths' 字段")
+	}
+	
+	fmt.Println("✅ pull-secret 文件格式验证通过")
+	return nil
+}
+
+// copyFile 复制文件
+func (l *ImageLoader) copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+	
+	_, err = io.Copy(destFile, sourceFile)
+	return err
 } 

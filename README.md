@@ -86,6 +86,18 @@ ocpack load-image my-cluster
 ocpack generate-iso my-cluster
 ```
 
+**注意**：在执行 `load-image` 命令之前，需要先获取 Red Hat pull-secret：
+
+1. 访问 [Red Hat OpenShift Pull Secret](https://console.redhat.com/openshift/install/pull-secret)
+2. 登录您的 Red Hat 账户
+3. 下载 pull-secret 文件
+4. 将文件保存为 `my-cluster/pull-secret.txt`
+
+pull-secret 文件格式示例：
+```json
+{"auths":{"cloud.openshift.com":{"auth":"...","email":"..."},"quay.io":{"auth":"...","email":"..."},"registry.connect.redhat.com":{"auth":"...","email":"..."},"registry.redhat.io":{"auth":"...","email":"..."}}}
+```
+
 ## 配置文件说明
 
 配置文件使用 TOML 格式，主要包含以下几个部分：
