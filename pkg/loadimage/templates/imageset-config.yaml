@@ -1,0 +1,44 @@
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v2alpha1
+mirror:
+  platform:
+    channels:
+    - name: {{.OCPChannel}}-{{.OCPVerMajor}}
+      minVersion: {{.OCPVer}}
+      maxVersion: {{.OCPVer}}
+      type: ocp
+#      shortestPath: true
+    graph: true
+  
+  # 可选: 添加 operators 同步配置
+  {{- if .IncludeOperators}}
+  operators:
+  - catalog: registry.redhat.io/redhat/redhat-operator-index:v{{.OCPVerMajor}}
+    packages:
+    {{- range .OperatorPackages}}
+    - name: {{.}}
+    {{- end}}
+  {{- end}}
+
+  # 可选: 添加额外镜像同步配置  
+  {{- if .AdditionalImages}}
+  additionalImages:
+  {{- range .AdditionalImages}}
+  - name: {{.}}
+  {{- end}}
+  {{- end}}
+
+  # 可选: Helm charts 同步配置
+  {{- if .HelmCharts}}
+  helm:
+    repositories:
+    {{- range .HelmRepositories}}
+    - name: {{.Name}}
+      url: {{.URL}}
+      charts:
+      {{- range .Charts}}
+      - name: {{.Name}}
+        version: {{.Version}}
+      {{- end}}
+    {{- end}}
+  {{- end}} 
