@@ -257,3 +257,8 @@ pkg/deploy/ansible/bastion/
 ## 许可证
 
 MIT 
+
+
+
+## 依赖
+需要 ansible 和 ssh-pass 包
