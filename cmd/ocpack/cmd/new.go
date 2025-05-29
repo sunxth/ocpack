@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"ocpack/pkg/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -51,7 +52,6 @@ func createNewCluster(clusterName string) {
 	// 3. 创建子目录结构
 	dirsToCreate := []string{
 		filepath.Join(clusterDir, "downloads"),
-		filepath.Join(clusterDir, "bastion"),
 		filepath.Join(clusterDir, "registry"),
 	}
 
@@ -64,4 +64,4 @@ func createNewCluster(clusterName string) {
 
 	fmt.Printf("集群 '%s' 初始化成功！\n", clusterName)
 	fmt.Printf("请编辑配置文件: %s\n", configPath)
-} 
+}

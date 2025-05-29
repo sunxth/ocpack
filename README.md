@@ -16,6 +16,9 @@ ocpack 是一个用于离线环境中部署 OpenShift 集群的 Go 语言命令�
   - oc-mirror 工具 (4.14.0+ 版本支持)
   - butane 工具 (Ignition 配置生成)
   - Quay 镜像仓库安装包 (mirror-registry)
+- 镜像管理：分离的镜像保存和加载功能
+  - **save-image**: 使用 oc-mirror 保存镜像到本地磁盘
+  - **load-image**: 从本地磁盘加载镜像到 registry
 
 ## 安装
 
@@ -79,6 +82,9 @@ ocpack deploy-bastion -c my-cluster/config.toml
 # 部署 Registry 节点
 ocpack deploy-registry -c my-cluster/config.toml
 
+# 保存镜像到本地磁盘
+ocpack save-image my-cluster
+
 # 加载镜像到 Registry
 ocpack load-image my-cluster
 
@@ -86,7 +92,7 @@ ocpack load-image my-cluster
 ocpack generate-iso my-cluster
 ```
 
-**注意**：在执行 `load-image` 命令之前，需要先获取 Red Hat pull-secret：
+**注意**：在执行 `save-image` 命令之前，需要先获取 Red Hat pull-secret：
 
 1. 访问 [Red Hat OpenShift Pull Secret](https://console.redhat.com/openshift/install/pull-secret)
 2. 登录您的 Red Hat 账户
@@ -96,6 +102,72 @@ ocpack generate-iso my-cluster
 pull-secret 文件格式示例：
 ```json
 {"auths":{"cloud.openshift.com":{"auth":"...","email":"..."},"quay.io":{"auth":"...","email":"..."},"registry.connect.redhat.com":{"auth":"...","email":"..."},"registry.redhat.io":{"auth":"...","email":"..."}}}
+```
+
+## 镜像管理工作流
+
+ocpack 提供了分离的镜像管理命令，支持灵活的离线部署场景：
+
+### 1. 保存镜像 (save-image)
+
+在有网络连接的环境中，使用 `save-image` 命令下载并保存 OpenShift 镜像：
+
+```bash
+# 基本用法
+ocpack save-image my-cluster
+
+# 包含 Operator 镜像
+ocpack save-image my-cluster --include-operators
+
+# 包含 Helm Charts
+ocpack save-image my-cluster --include-helm
+
+# 添加额外镜像
+ocpack save-image my-cluster --additional-images registry.redhat.io/ubi8/ubi:latest,registry.redhat.io/ubi9/ubi:latest
+```
+
+此命令会：
+- 验证 pull-secret 文件
+- 生成 ImageSet 配置文件
+- 使用 oc-mirror 下载镜像到 `my-cluster/images/` 目录
+
+### 2. 加载镜像 (load-image)
+
+在离线环境中，使用 `load-image` 命令将保存的镜像加载到 registry：
+
+```bash
+# 基本用法
+ocpack load-image my-cluster
+
+# 指定 registry 参数（可选）
+ocpack load-image my-cluster --registry-url registry.example.com:8443 --username admin --password password
+```
+
+此命令会：
+- 验证本地镜像目录存在
+- 配置 CA 证书信任
+- 验证 registry 连接
+- 配置认证信息
+- 将镜像推送到 registry
+
+### 3. 工作流示例
+
+**场景 1: 同一环境**
+```bash
+# 一次性完成保存和加载
+ocpack save-image my-cluster
+ocpack load-image my-cluster
+```
+
+**场景 2: 跨环境部署**
+```bash
+# 在有网络的环境中
+ocpack save-image my-cluster --include-operators
+
+# 将 my-cluster/images/ 目录传输到离线环境
+
+# 在离线环境中
+ocpack load-image my-cluster
 ```
 
 ## 配置文件说明
@@ -217,6 +289,8 @@ ocpack/
 │   ├── config/        # 配置处理
 │   ├── deploy/        # 部署功能
 │   ├── download/      # 下载功能
+│   ├── saveimage/     # 镜像保存功能
+│   ├── loadimage/     # 镜像加载功能
 │   └── utils/         # 通用工具
 └── README.md          # 项目说明
 ```
@@ -253,6 +327,18 @@ ocpack 使用 Go 的 `embed` 包将 Ansible playbook 嵌入到二进制文件中
                     └─────────────────┘
 ```
 
+### 镜像管理架构
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  save-image     │    │   本地磁盘      │    │  load-image     │
+│                 │    │                 │    │                 │
+│ • pull-secret   │───▶│ • images/       │───▶│ • CA 证书配置   │
+│ • oc-mirror     │    │ • workspace/    │    │ • 认证配置      │
+│ • ImageSet 配置 │    │ • 镜像文件      │    │ • registry 推送 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
 ### 文件结构
 
 ```
@@ -264,13 +350,19 @@ pkg/deploy/ansible/bastion/
     ├── forward.zone.j2       # DNS 正向解析
     ├── reverse.zone.j2       # DNS 反向解析
     └── haproxy.cfg.j2        # HAProxy 配置
+
+pkg/saveimage/
+├── saver.go                  # 镜像保存逻辑
+└── templates/
+    └── imageset-config.yaml  # ImageSet 配置模板
+
+pkg/loadimage/
+└── loader.go                 # 镜像加载逻辑
 ```
 
 ## 许可证
 
 MIT 
-
-
 
 ## 依赖
 需要 ansible 和 ssh-pass 包

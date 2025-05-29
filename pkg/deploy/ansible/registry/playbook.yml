@@ -9,6 +9,8 @@
     registry_ip: "{{ registry.ip }}"
     registry_storage_path: "{{ registry.storage_path }}"
     registry_user: "{{ registry.registry_user }}"
+    registry_hostname: "registry.{{ cluster_name }}.{{ cluster_domain }}"
+    bastion_ip: "{{ bastion.ip }}"
   tasks:
     - name: Debug system information
       debug:
@@ -17,6 +19,26 @@
           - "Distribution: {{ ansible_distribution }}"
           - "Distribution Version: {{ ansible_distribution_version }}"
           - "Distribution Major Version: {{ ansible_distribution_major_version }}"
+          - "Registry Hostname: {{ registry_hostname }}"
+          - "Bastion IP: {{ bastion_ip }}"
+
+    - name: Configure DNS to use bastion as DNS server
+      lineinfile:
+        path: /etc/resolv.conf
+        regexp: '^nameserver'
+        line: "nameserver {{ bastion_ip }}"
+        backup: yes
+
+    - name: Set hostname to registry.cluster.domain
+      hostname:
+        name: "{{ registry_hostname }}"
+
+    - name: Update /etc/hosts with registry hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^{{ registry_ip }}.*"
+        line: "{{ registry_ip }} {{ registry_hostname }} registry"
+        backup: yes
 
     - name: Install required packages
       yum:
@@ -163,13 +185,14 @@
         path: "/tmp/image-archive.tar"
       register: image_archive_file
 
-    - name: Install mirror-registry with image archive
+    - name: Install mirror-registry with image archive and hostname
       command: >
         /tmp/mirror-registry install
         --image-archive /tmp/image-archive.tar
         --initUser {{ registry_user }}
         --initPassword ztesoft123
         --quayRoot {{ registry_storage_path }}
+        --quayHostname {{ registry_hostname }}
       register: mirror_registry_install
       when: mirror_registry_file.stat.exists and image_archive_file.stat.exists
       args:
@@ -196,11 +219,12 @@
       debug:
         msg:
           - "Mirror Registry installation completed successfully!"
-          - "Registry URL: https://{{ registry_ip }}:8443"
+          - "Registry URL: https://{{ registry_hostname }}:8443"
+          - "Registry IP: https://{{ registry_ip }}:8443"
           - "Username: {{ registry_user }}"
           - "Password: ztesoft123"
           - "Config data stored in: ~/quay-install"
-          - "Note: Quay is running on localhost:8443 and accessible via {{ registry_ip }}:8443"
+          - "Note: Quay is running with hostname {{ registry_hostname }}"
       when: mirror_registry_install is succeeded
 
     - name: Create local registry config directory
@@ -237,10 +261,5 @@
           - "  {{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/quay-config/"
           - "  {{ project_root }}/{{ cluster_dir }}/registry/{{ registry_ip }}/quay-rootCA/"
           - "These files contain SSL certificates and configuration needed for mirror operations."
-      when: mirror_registry_install is succeeded
-
-  handlers:
-    - name: restart httpd
-      systemd:
-        name: httpd
-        state: restarted 
+          - "Registry hostname: {{ registry_hostname }}"
+      when: mirror_registry_install is succeeded 

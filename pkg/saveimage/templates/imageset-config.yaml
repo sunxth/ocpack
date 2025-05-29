@@ -1,5 +1,8 @@
 kind: ImageSetConfiguration
 apiVersion: mirror.openshift.io/v1alpha2
+storageConfig:
+  local:
+    path: {{.WorkspacePath}}
 mirror:
   platform:
     channels:
