@@ -486,4 +486,4 @@ pkg/loadimage/
 MIT 
 
 ## 依赖
-需要 ansible 和 ssh-pass 包
+需要 ansible 和 sshpass 以及 nmstate
