@@ -2,6 +2,8 @@ package iso
 
 import (
 	"embed"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,9 +30,9 @@ type ISOGenerator struct {
 
 // GenerateOptions ISO 生成选项
 type GenerateOptions struct {
-	OutputPath    string
-	BaseISOPath   string
-	SkipVerify    bool
+	OutputPath  string
+	BaseISOPath string
+	SkipVerify  bool
 }
 
 // InstallConfigData install-config.yaml 模板数据
@@ -183,10 +185,37 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 	}
 
 	// 读取 pull-secret
-	pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
-	pullSecretBytes, err := os.ReadFile(pullSecretPath)
-	if err != nil {
-		return fmt.Errorf("读取 pull-secret 失败: %v", err)
+	// 优先使用包含我们自己 registry 认证的合并认证文件
+	var pullSecretBytes []byte
+	var err error
+
+	mergedAuthPath := filepath.Join(g.ClusterDir, "registry", "merged-auth.json")
+	if _, err := os.Stat(mergedAuthPath); err == nil {
+		// 如果存在合并的认证文件，使用它
+		fmt.Printf("📋 使用合并的认证文件: %s\n", mergedAuthPath)
+		pullSecretBytes, err = os.ReadFile(mergedAuthPath)
+		if err != nil {
+			return fmt.Errorf("读取合并认证文件失败: %v", err)
+		}
+	} else {
+		// 如果合并认证文件不存在，先创建它
+		fmt.Printf("📋 合并认证文件不存在，正在创建...\n")
+		if err := g.createMergedAuthConfig(); err != nil {
+			fmt.Printf("⚠️  创建合并认证文件失败: %v，使用原始 pull-secret\n", err)
+			// 如果创建失败，使用原始的 pull-secret.txt
+			pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
+			pullSecretBytes, err = os.ReadFile(pullSecretPath)
+			if err != nil {
+				return fmt.Errorf("读取 pull-secret 失败: %v", err)
+			}
+		} else {
+			// 创建成功，读取合并认证文件
+			fmt.Printf("📋 使用新创建的合并认证文件: %s\n", mergedAuthPath)
+			pullSecretBytes, err = os.ReadFile(mergedAuthPath)
+			if err != nil {
+				return fmt.Errorf("读取合并认证文件失败: %v", err)
+			}
+		}
 	}
 	pullSecret := strings.TrimSpace(string(pullSecretBytes))
 
@@ -1219,4 +1248,70 @@ func (g *ISOGenerator) isValidVersionFormat(version string) bool {
 	}
 
 	return true
+}
+
+// createMergedAuthConfig 创建合并的认证配置文件
+func (g *ISOGenerator) createMergedAuthConfig() error {
+	fmt.Println("🔐 创建合并的认证配置文件...")
+
+	// 读取原始 pull-secret
+	pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
+	pullSecretContent, err := os.ReadFile(pullSecretPath)
+	if err != nil {
+		return fmt.Errorf("读取 pull-secret 失败: %v", err)
+	}
+
+	var pullSecret map[string]interface{}
+	if err := json.Unmarshal(pullSecretContent, &pullSecret); err != nil {
+		return fmt.Errorf("解析 pull-secret 失败: %v", err)
+	}
+
+	auths, ok := pullSecret["auths"].(map[string]interface{})
+	if !ok {
+		auths = make(map[string]interface{})
+		pullSecret["auths"] = auths
+	}
+
+	// 使用域名而不是 IP 地址添加 Quay registry 认证信息
+	registryHostname := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	registryURL := fmt.Sprintf("%s:8443", registryHostname)
+	authString := fmt.Sprintf("%s:ztesoft123", g.Config.Registry.RegistryUser)
+	authBase64 := base64.StdEncoding.EncodeToString([]byte(authString))
+
+	auths[registryURL] = map[string]interface{}{
+		"auth":  authBase64,
+		"email": "",
+	}
+
+	mergedAuthContent, err := json.MarshalIndent(pullSecret, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化合并后的认证配置失败: %v", err)
+	}
+
+	// 确保 registry 目录存在
+	registryDir := filepath.Join(g.ClusterDir, "registry")
+	if err := os.MkdirAll(registryDir, 0755); err != nil {
+		return fmt.Errorf("创建 registry 目录失败: %v", err)
+	}
+
+	// 保存到多个位置
+	authPaths := []string{
+		filepath.Join(registryDir, "merged-auth.json"),
+		filepath.Join(os.Getenv("HOME"), ".docker", "config.json"),
+	}
+
+	for _, authPath := range authPaths {
+		if err := os.MkdirAll(filepath.Dir(authPath), 0755); err != nil {
+			return fmt.Errorf("创建认证配置目录失败: %v", err)
+		}
+
+		if err := os.WriteFile(authPath, mergedAuthContent, 0600); err != nil {
+			return fmt.Errorf("保存合并后的认证配置失败: %v", err)
+		}
+
+		fmt.Printf("✅ 认证配置已保存到: %s\n", authPath)
+	}
+
+	fmt.Printf("📋 已添加 registry 认证: %s\n", registryURL)
+	return nil
 }
