@@ -44,7 +44,7 @@ func NewImageLoader(clusterName, projectRoot string) (*ImageLoader, error) {
 
 // LoadToRegistry 从磁盘加载镜像到 Quay registry
 func (l *ImageLoader) LoadToRegistry() error {
-	fmt.Println("=== 开始从磁盘加载镜像到 Quay registry ===")
+	fmt.Println("📤 开始加载镜像到 registry...")
 
 	// 验证镜像目录是否存在
 	imagesDir := filepath.Join(l.ClusterDir, "images")
@@ -53,35 +53,27 @@ func (l *ImageLoader) LoadToRegistry() error {
 	}
 
 	// 1. 配置CA证书 (在验证仓库之前)
-	fmt.Println("步骤1: 配置CA证书...")
 	if err := l.setupCACertificates(); err != nil {
-		fmt.Printf("⚠️  CA证书配置失败: %v\n", err)
-		fmt.Println("💡 提示: 请确保 registry 已正确部署并且证书文件存在")
+		fmt.Printf("⚠️  CA证书配置失败，请确保 registry 已正确部署\n")
 	}
 
 	// 2. 验证 registry 连接
-	fmt.Println("步骤2: 验证 registry 连接...")
 	if err := l.ValidateRegistry(); err != nil {
 		return fmt.Errorf("registry 连接验证失败: %v", err)
 	}
 
 	// 3. 配置认证信息
-	fmt.Println("步骤3: 配置认证信息...")
 	if err := l.setupRegistryAuth(); err != nil {
 		return fmt.Errorf("配置 registry 认证失败: %v", err)
 	}
 
 	// 4. 执行镜像加载
-	fmt.Println("步骤4: 执行镜像加载...")
 	if err := l.runOcMirrorLoad(); err != nil {
 		return fmt.Errorf("oc-mirror 加载镜像失败: %v", err)
 	}
 
-	fmt.Println("=== 镜像加载到 Quay registry 完成 ===")
 	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
-	fmt.Printf("🎉 镜像已成功加载到: https://%s:8443\n", registryHostname)
-	fmt.Printf("📋 用户名: %s\n", l.Config.Registry.RegistryUser)
-	fmt.Printf("🔑 密码: ztesoft123\n")
+	fmt.Printf("✅ 镜像已加载到: https://%s:8443\n", registryHostname)
 	return nil
 }
 
@@ -90,7 +82,6 @@ func (l *ImageLoader) ValidateRegistry() error {
 	// 使用域名而不是 IP 地址
 	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
 	registryURL := fmt.Sprintf("%s:8443", registryHostname)
-	fmt.Printf("验证 Quay registry 连接: %s\n", registryURL)
 
 	containerTool := l.getContainerTool()
 	loginCmd := exec.Command(containerTool, "login",
@@ -98,15 +89,12 @@ func (l *ImageLoader) ValidateRegistry() error {
 		"--password", "ztesoft123",
 		registryURL)
 
-	fmt.Printf("执行登录测试: %s login --username %s %s\n",
-		containerTool, l.Config.Registry.RegistryUser, registryURL)
-
 	output, err := loginCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("登录失败: %v, 输出: %s", err, string(output))
 	}
 
-	fmt.Printf("✅ Quay registry 连接验证成功: %s\n", registryURL)
+	fmt.Printf("✅ Registry 连接验证成功\n")
 	return nil
 }
 
@@ -123,13 +111,10 @@ func (l *ImageLoader) getContainerTool() string {
 
 // setupRegistryAuth 配置 registry 认证信息
 func (l *ImageLoader) setupRegistryAuth() error {
-	fmt.Println("配置 registry 认证信息...")
-
 	if err := l.mergeAuthConfigs(); err != nil {
 		return fmt.Errorf("合并认证配置失败: %v", err)
 	}
 
-	fmt.Println("✅ registry 认证配置完成")
 	return nil
 }
 

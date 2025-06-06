@@ -91,7 +91,7 @@ func (ae *AnsibleExecutor) ExtractBastionFiles() error {
 // GenerateInventory 生成 Ansible inventory 文件
 func (ae *AnsibleExecutor) GenerateInventory() error {
 	inventoryTemplatePath := filepath.Join(ae.workDir, "ansible/bastion/inventory.ini")
-	
+
 	// 读取模板文件
 	templateContent, err := os.ReadFile(inventoryTemplatePath)
 	if err != nil {
@@ -124,17 +124,17 @@ func (ae *AnsibleExecutor) GenerateInventory() error {
 // GenerateVarsFile 生成 Ansible 变量文件
 func (ae *AnsibleExecutor) GenerateVarsFile() error {
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
-	
+
 	// 获取当前工作目录（项目根目录）
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("获取当前工作目录失败: %w", err)
 	}
-	
+
 	// 获取配置文件所在的目录名
 	configDir := filepath.Dir(filepath.Join(currentDir, ae.ConfigFilePath))
 	clusterDir := filepath.Base(configDir)
-	
+
 	varsContent := fmt.Sprintf(`---
 cluster_info:
   name: "%s"
@@ -220,22 +220,19 @@ func (ae *AnsibleExecutor) RunBastionPlaybook() error {
 	playbookPath := filepath.Join(ae.workDir, "ansible/bastion/playbook.yml")
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
 
-	cmd := exec.Command("ansible-playbook", 
+	cmd := exec.Command("ansible-playbook",
 		"-i", ae.inventory,
 		"-e", fmt.Sprintf("@%s", varsPath),
+		"--diff",
 		playbookPath,
 	)
 
 	// 设置工作目录
 	cmd.Dir = ae.workDir
-	
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
-	fmt.Printf("执行 Ansible playbook: %s\n", playbookPath)
-	fmt.Printf("使用 inventory: %s\n", ae.inventory)
-	fmt.Printf("工作目录: %s\n", ae.workDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("执行 Ansible playbook 失败: %w", err)
@@ -307,7 +304,7 @@ func (ae *AnsibleExecutor) ExtractRegistryFiles() error {
 // GenerateRegistryInventory 生成 Registry Ansible inventory 文件
 func (ae *AnsibleExecutor) GenerateRegistryInventory() error {
 	inventoryTemplatePath := filepath.Join(ae.workDir, "ansible/registry/inventory.ini")
-	
+
 	// 读取模板文件
 	templateContent, err := os.ReadFile(inventoryTemplatePath)
 	if err != nil {
@@ -363,26 +360,23 @@ func (ae *AnsibleExecutor) RunRegistryPlaybook() error {
 	playbookPath := filepath.Join(ae.workDir, "ansible/registry/playbook.yml")
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
 
-	cmd := exec.Command("ansible-playbook", 
+	cmd := exec.Command("ansible-playbook",
 		"-i", ae.inventory,
 		"-e", fmt.Sprintf("@%s", varsPath),
+		"--diff",
 		playbookPath,
 	)
 
 	// 设置工作目录
 	cmd.Dir = ae.workDir
-	
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
-	fmt.Printf("执行 Ansible playbook: %s\n", playbookPath)
-	fmt.Printf("使用 inventory: %s\n", ae.inventory)
-	fmt.Printf("工作目录: %s\n", ae.workDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("执行 Ansible playbook 失败: %w", err)
 	}
 
 	return nil
-} 
+}

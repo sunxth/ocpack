@@ -13,62 +13,40 @@ import (
 
 // downloadCmd 表示 download 命令
 var downloadCmd = &cobra.Command{
-	Use:   "download [cluster-name]",
+	Use:   "download",
 	Short: "下载 OpenShift 安装所需的介质",
 	Long: `下载 OpenShift 安装所需的介质，包括镜像、工具等。
 这些文件将被下载到配置文件中指定的目录。
 
 使用方式:
-  # 使用配置文件路径
-  ocpack download -c demo/config.toml
-  
-  # 使用集群名（约定配置文件位于 <集群名>/config.toml）
   ocpack download demo`,
-	Args: cobra.MaximumNArgs(1), // 最多接受1个参数（集群名）
+	Args: cobra.ExactArgs(1), // 必须提供一个集群名参数
 	Run: func(cmd *cobra.Command, args []string) {
-		var configPath string
-		var err error
+		clusterName := args[0]
 
-		// 获取配置文件路径
-		configFlag, err := cmd.Flags().GetString("config")
+		// 获取当前工作目录作为项目根目录
+		projectRoot, err := os.Getwd()
 		if err != nil {
-			fmt.Printf("获取配置文件路径失败: %v\n", err)
+			fmt.Printf("获取当前目录失败: %v\n", err)
 			return
 		}
 
-		// 判断配置文件路径的来源
-		if cmd.Flags().Changed("config") {
-			// 如果用户明确指定了 -c 参数，使用指定的路径
-			configPath = configFlag
-		} else if len(args) > 0 {
-			// 如果没有指定 -c 参数但提供了集群名，使用约定路径
-			clusterName := args[0]
-			projectRoot, err := os.Getwd()
-			if err != nil {
-				fmt.Printf("获取当前目录失败: %v\n", err)
-				return
-			}
-
-			// 检查集群目录是否存在
-			clusterDir := filepath.Join(projectRoot, clusterName)
-			if _, err := os.Stat(clusterDir); os.IsNotExist(err) {
-				fmt.Printf("集群目录不存在: %s\n", clusterDir)
-				return
-			}
-
-			configPath = filepath.Join(clusterDir, "config.toml")
-
-			// 检查配置文件是否存在
-			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				fmt.Printf("配置文件不存在: %s\n", configPath)
-				return
-			}
-
-			fmt.Printf("使用集群配置文件: %s\n", configPath)
-		} else {
-			// 既没有指定 -c 参数也没有提供集群名，使用默认值
-			configPath = configFlag
+		// 检查集群目录是否存在
+		clusterDir := filepath.Join(projectRoot, clusterName)
+		if _, err := os.Stat(clusterDir); os.IsNotExist(err) {
+			fmt.Printf("集群目录不存在: %s\n", clusterDir)
+			return
 		}
+
+		configPath := filepath.Join(clusterDir, "config.toml")
+
+		// 检查配置文件是否存在
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			fmt.Printf("配置文件不存在: %s\n", configPath)
+			return
+		}
+
+		fmt.Printf("使用集群配置文件: %s\n", configPath)
 
 		// 加载配置
 		cfg, err := config.LoadConfig(configPath)
@@ -100,5 +78,4 @@ var downloadCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(downloadCmd)
-	downloadCmd.Flags().StringP("config", "c", "config.toml", "配置文件路径")
 }

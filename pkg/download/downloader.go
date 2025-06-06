@@ -2,18 +2,17 @@ package download
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"ocpack/pkg/config"
+	"ocpack/pkg/utils"
 )
 
 // Downloader 负责下载所需文件
@@ -36,14 +35,14 @@ type ProgressReader struct {
 func (pr *ProgressReader) Read(p []byte) (int, error) {
 	n, err := pr.Reader.Read(p)
 	pr.downloaded += int64(n)
-	
+
 	// 限制更新频率，避免输出过于频繁
 	now := time.Now()
 	if now.Sub(pr.lastUpdate) >= 100*time.Millisecond || err == io.EOF {
 		pr.lastUpdate = now
 		pr.printProgress()
 	}
-	
+
 	return n, err
 }
 
@@ -51,39 +50,39 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 func (pr *ProgressReader) printProgress() {
 	if pr.total <= 0 {
 		// 如果不知道总大小，显示已下载大小
-		fmt.Printf("\r⬇️  %s: %s downloaded", 
-			pr.fileName, 
+		fmt.Printf("\r⬇️  %s: %s downloaded",
+			pr.fileName,
 			pr.formatBytes(pr.downloaded))
 		return
 	}
-	
+
 	percent := float64(pr.downloaded) / float64(pr.total) * 100
 	elapsed := time.Since(pr.startTime)
-	
+
 	// 计算下载速度
 	speed := float64(pr.downloaded) / elapsed.Seconds()
-	
+
 	// 估算剩余时间
 	var eta time.Duration
 	if speed > 0 && pr.downloaded < pr.total {
 		remaining := pr.total - pr.downloaded
 		eta = time.Duration(float64(remaining)/speed) * time.Second
 	}
-	
+
 	// 创建进度条
 	barWidth := 30
 	filled := int(percent * float64(barWidth) / 100)
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-	
+
 	// 格式化输出
-	fmt.Printf("\r⬇️  %s: [%s] %.1f%% (%s/%s) %s/s", 
+	fmt.Printf("\r⬇️  %s: [%s] %.1f%% (%s/%s) %s/s",
 		pr.fileName,
 		bar,
 		percent,
 		pr.formatBytes(pr.downloaded),
 		pr.formatBytes(pr.total),
 		pr.formatBytes(int64(speed)))
-	
+
 	if eta > 0 {
 		fmt.Printf(" ETA: %s", pr.formatDuration(eta))
 	}
@@ -95,13 +94,13 @@ func (pr *ProgressReader) formatBytes(bytes int64) string {
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
 	}
-	
+
 	div, exp := int64(unit), 0
 	for n := bytes / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	
+
 	units := []string{"KB", "MB", "GB", "TB"}
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
 }
@@ -116,12 +115,13 @@ func (pr *ProgressReader) formatDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
+
 type DownloadTask struct {
-	Name        string
-	URL         string
-	FileName    string
-	Required    bool
-	VersionDep  bool // 是否依赖版本
+	Name       string
+	URL        string
+	FileName   string
+	Required   bool
+	VersionDep bool // 是否依赖版本
 }
 
 // NewDownloader 创建一个新的下载器
@@ -140,30 +140,48 @@ func (d *Downloader) DownloadAll() error {
 	}
 
 	version := d.config.ClusterInfo.OpenShiftVersion
-	
+
 	// 构建下载任务列表
 	tasks := d.buildDownloadTasks(version)
-	
+
+	// 统计跳过的文件
+	var skippedFiles []string
+	var downloadedFiles []string
+
 	// 执行下载任务
 	for _, task := range tasks {
 		if task.VersionDep && !d.supportsOcMirror(version) {
 			fmt.Printf("跳过 %s: OpenShift 版本 %s 不支持 (需要 4.14.0 及以上版本)\n", task.Name, version)
 			continue
 		}
-		
-		if err := d.downloadFile(task.URL, filepath.Join(d.downloadDir, task.FileName)); err != nil {
+
+		// 检查文件是否已存在
+		destPath := filepath.Join(d.downloadDir, task.FileName)
+		if _, err := os.Stat(destPath); err == nil {
+			skippedFiles = append(skippedFiles, task.FileName)
+			continue
+		}
+
+		if err := d.downloadFile(task.URL, destPath); err != nil {
 			if task.Required {
 				return fmt.Errorf("下载 %s 失败: %w", task.Name, err)
 			}
 			fmt.Printf("警告: 下载 %s 失败: %v\n", task.Name, err)
+		} else {
+			downloadedFiles = append(downloadedFiles, task.FileName)
 		}
+	}
+
+	// 显示跳过文件的汇总
+	if len(skippedFiles) > 0 {
+		fmt.Printf("✓ 跳过已存在文件 (%d个): %s\n", len(skippedFiles), strings.Join(skippedFiles, ", "))
 	}
 
 	// 提取工具到 bin 目录
 	if err := d.extractTools(version); err != nil {
 		return fmt.Errorf("提取工具失败: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -171,7 +189,7 @@ func (d *Downloader) DownloadAll() error {
 func (d *Downloader) buildDownloadTasks(version string) []DownloadTask {
 	arch := d.getSystemArch()
 	butaneArch := d.getSystemArchForButane()
-	
+
 	return []DownloadTask{
 		{
 			Name:     "OpenShift 客户端",
@@ -213,7 +231,7 @@ func (d *Downloader) getSystemArch() string {
 		"amd64": "x86_64",
 		"arm64": "aarch64",
 	}
-	
+
 	if mapped, exists := archMap[runtime.GOARCH]; exists {
 		return mapped
 	}
@@ -224,10 +242,10 @@ func (d *Downloader) getSystemArch() string {
 func (d *Downloader) getSystemArchForButane() string {
 	osArchMap := map[string]map[string]string{
 		"linux": {
-			"amd64":    "amd64",
-			"arm64":    "aarch64",
-			"ppc64le":  "ppc64le",
-			"s390x":    "s390x",
+			"amd64":   "amd64",
+			"arm64":   "aarch64",
+			"ppc64le": "ppc64le",
+			"s390x":   "s390x",
 		},
 		"darwin": {
 			"amd64": "darwin-amd64",
@@ -237,7 +255,7 @@ func (d *Downloader) getSystemArchForButane() string {
 			"amd64": "windows-amd64.exe",
 		},
 	}
-	
+
 	if osMap, exists := osArchMap[runtime.GOOS]; exists {
 		if arch, exists := osMap[runtime.GOARCH]; exists {
 			return arch
@@ -248,91 +266,27 @@ func (d *Downloader) getSystemArchForButane() string {
 
 // supportsOcMirror 检查版本是否支持 oc-mirror 工具
 func (d *Downloader) supportsOcMirror(version string) bool {
-	return d.compareVersion(version, "4.14.0") >= 0
+	return utils.SupportsOcMirror(version)
 }
 
 // compareVersion 比较两个版本号 - 优化版本
 func (d *Downloader) compareVersion(v1, v2 string) int {
-	parts1 := d.parseVersion(v1)
-	parts2 := d.parseVersion(v2)
-	
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-	
-	for i := 0; i < maxLen; i++ {
-		p1, p2 := 0, 0
-		if i < len(parts1) {
-			p1 = parts1[i]
-		}
-		if i < len(parts2) {
-			p2 = parts2[i]
-		}
-		
-		if p1 != p2 {
-			if p1 < p2 {
-				return -1
-			}
-			return 1
-		}
-	}
-	
-	return 0
+	return utils.CompareVersion(v1, v2)
 }
 
 // parseVersion 解析版本号为整数数组 - 优化版本
 func (d *Downloader) parseVersion(version string) []int {
-	if version == "" {
-		return []int{0}
-	}
-	
-	parts := strings.Split(version, ".")
-	result := make([]int, 0, len(parts))
-	
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		
-		// 提取数字部分
-		var numStr strings.Builder
-		for _, char := range part {
-			if char >= '0' && char <= '9' {
-				numStr.WriteRune(char)
-			} else {
-				break
-			}
-		}
-		
-		if numStr.Len() > 0 {
-			if num, err := strconv.Atoi(numStr.String()); err == nil {
-				result = append(result, num)
-			}
-		}
-	}
-	
-	if len(result) == 0 {
-		return []int{0}
-	}
-	
-	return result
+	return utils.ParseVersion(version)
 }
 
 // downloadFile 下载文件到指定路径 - 带进度条版本
 func (d *Downloader) downloadFile(url, destPath string) error {
-	// 检查文件是否已存在
-	if _, err := os.Stat(destPath); err == nil {
-		fmt.Printf("✓ 文件已存在，跳过下载: %s\n", filepath.Base(destPath))
-		return nil
-	}
-
 	fileName := filepath.Base(destPath)
 	fmt.Printf("🚀 开始下载: %s\n", fileName)
-	
+
 	// 创建临时文件
 	tmpPath := destPath + ".tmp"
-	
+
 	// 清理函数
 	cleanup := func() {
 		if _, err := os.Stat(tmpPath); err == nil {
@@ -340,7 +294,7 @@ func (d *Downloader) downloadFile(url, destPath string) error {
 		}
 	}
 	defer cleanup()
-	
+
 	// 发送 HEAD 请求获取文件大小
 	headResp, err := http.Head(url)
 	var contentLength int64
@@ -348,7 +302,7 @@ func (d *Downloader) downloadFile(url, destPath string) error {
 		headResp.Body.Close()
 		contentLength = headResp.ContentLength
 	}
-	
+
 	// 下载文件
 	resp, err := http.Get(url)
 	if err != nil {
@@ -383,10 +337,10 @@ func (d *Downloader) downloadFile(url, destPath string) error {
 
 	// 复制数据（带进度显示）
 	_, err = io.Copy(out, progressReader)
-	
+
 	// 完成后换行，避免进度条被覆盖
 	fmt.Println()
-	
+
 	if err != nil {
 		return fmt.Errorf("保存文件失败: %w", err)
 	}
@@ -402,13 +356,13 @@ func (d *Downloader) downloadFile(url, destPath string) error {
 	// 计算总下载时间
 	elapsed := time.Since(progressReader.startTime)
 	avgSpeed := float64(progressReader.downloaded) / elapsed.Seconds()
-	
-	fmt.Printf("✅ 下载完成: %s (%s, 平均速度: %s/s, 用时: %s)\n", 
-		fileName, 
+
+	fmt.Printf("✅ 下载完成: %s (%s, 平均速度: %s/s, 用时: %s)\n",
+		fileName,
 		progressReader.formatBytes(progressReader.downloaded),
 		progressReader.formatBytes(int64(avgSpeed)),
 		progressReader.formatDuration(elapsed))
-	
+
 	return nil
 }
 
@@ -458,7 +412,7 @@ func (d *Downloader) extractTools(version string) error {
 		if !task.condition() {
 			continue
 		}
-		
+
 		fullPath := filepath.Join(d.downloadDir, task.tarPath)
 		if err := d.extractTarGz(fullPath, binDir, task.files); err != nil {
 			return fmt.Errorf("提取 %s 失败: %w", task.name, err)
@@ -484,7 +438,7 @@ func (d *Downloader) copyButaneTool(binDir string) error {
 	arch := d.getSystemArchForButane()
 	srcPath := filepath.Join(d.downloadDir, fmt.Sprintf("butane-%s", arch))
 	dstPath := filepath.Join(binDir, "butane")
-	
+
 	return d.copyFile(srcPath, dstPath)
 }
 
@@ -492,7 +446,7 @@ func (d *Downloader) copyButaneTool(binDir string) error {
 func (d *Downloader) cleanupBinDir(binDir string) error {
 	// 定义需要清理的文件列表
 	filesToClean := []string{"oc", "kubectl", "openshift-install", "oc-mirror", "butane"}
-	
+
 	for _, fileName := range filesToClean {
 		filePath := filepath.Join(binDir, fileName)
 		if _, err := os.Stat(filePath); err == nil {
@@ -502,7 +456,7 @@ func (d *Downloader) cleanupBinDir(binDir string) error {
 			fmt.Printf("🗑️  清理已存在的文件: %s\n", fileName)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -513,88 +467,12 @@ func (d *Downloader) extractTarGz(tarPath, destDir string, targetFiles []string)
 		return nil
 	}
 
-	file, err := os.Open(tarPath)
-	if err != nil {
-		return fmt.Errorf("打开文件失败: %w", err)
-	}
-	defer file.Close()
-
-	gzr, err := gzip.NewReader(file)
-	if err != nil {
-		return fmt.Errorf("创建 gzip 读取器失败: %w", err)
-	}
-	defer gzr.Close()
-
-	tr := tar.NewReader(gzr)
-	hardLinks := make(map[string]string)
-	targetSet := make(map[string]bool)
-	
-	// 构建目标文件集合
-	for _, file := range targetFiles {
-		targetSet[file] = true
-	}
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("读取 tar 文件失败: %w", err)
-		}
-
-		fileName := filepath.Base(header.Name)
-		if !targetSet[fileName] {
-			continue
-		}
-
-		destPath := filepath.Join(destDir, fileName)
-
-		if header.Typeflag == tar.TypeLink {
-			// 处理硬链接
-			linkTarget := filepath.Base(header.Linkname)
-			if targetPath, exists := hardLinks[linkTarget]; exists {
-				// 检查目标文件是否已存在，如果存在则删除
-				if _, err := os.Stat(destPath); err == nil {
-					if err := os.Remove(destPath); err != nil {
-						return fmt.Errorf("删除已存在的文件失败: %w", err)
-					}
-				}
-				
-				if err := os.Link(targetPath, destPath); err != nil {
-					return fmt.Errorf("创建硬链接失败: %w", err)
-				}
-				fmt.Printf("📎 提取: %s (硬链接到 %s)\n", fileName, linkTarget)
-			} else {
-				return fmt.Errorf("硬链接目标 %s 不存在", linkTarget)
-			}
-		} else {
-			// 处理普通文件 - 检查文件是否已存在
-			if _, err := os.Stat(destPath); err == nil {
-				fmt.Printf("⚠️  文件已存在，覆盖: %s\n", fileName)
-			}
-			
-			if err := d.extractFile(tr, destPath); err != nil {
-				return fmt.Errorf("提取文件 %s 失败: %w", fileName, err)
-			}
-			hardLinks[fileName] = destPath
-			fmt.Printf("📄 提取: %s\n", fileName)
-		}
-	}
-
-	return nil
+	return utils.ExtractTarGz(tarPath, destDir, targetFiles)
 }
 
 // extractFile 提取单个文件 - 处理已存在的文件
 func (d *Downloader) extractFile(tr *tar.Reader, destPath string) error {
-	destFile, err := os.Create(destPath) // Create 会覆盖已存在的文件
-	if err != nil {
-		return fmt.Errorf("创建目标文件失败: %w", err)
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, tr)
-	return err
+	return utils.ExtractFile(tr, destPath)
 }
 
 // copyFile 复制文件 - 优化版本
@@ -604,20 +482,8 @@ func (d *Downloader) copyFile(src, dst string) error {
 		return nil
 	}
 
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("打开源文件失败: %w", err)
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("创建目标文件失败: %w", err)
-	}
-	defer dstFile.Close()
-
-	if _, err = io.Copy(dstFile, srcFile); err != nil {
-		return fmt.Errorf("复制文件失败: %w", err)
+	if err := utils.CopyFile(src, dst); err != nil {
+		return err
 	}
 
 	fmt.Printf("📋 复制: %s\n", filepath.Base(dst))
@@ -626,23 +492,13 @@ func (d *Downloader) copyFile(src, dst string) error {
 
 // makeExecutable 为目录中的所有文件设置可执行权限
 func (d *Downloader) makeExecutable(dir string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			if err := os.Chmod(path, 0755); err != nil {
-				return fmt.Errorf("设置文件权限失败 %s: %w", path, err)
-			}
-		}
-		return nil
-	})
+	return utils.MakeExecutable(dir)
 }
 
 // GetDownloadedFiles 获取已下载的文件列表
 func (d *Downloader) GetDownloadedFiles() ([]string, error) {
 	var files []string
-	
+
 	err := filepath.Walk(d.downloadDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -654,10 +510,10 @@ func (d *Downloader) GetDownloadedFiles() ([]string, error) {
 		}
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("获取已下载文件列表失败: %w", err)
 	}
-	
+
 	return files, nil
 }

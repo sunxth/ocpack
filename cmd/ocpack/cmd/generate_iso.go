@@ -66,12 +66,14 @@ var generateISOCmd = &cobra.Command{
 		outputPath, _ := cmd.Flags().GetString("output")
 		baseISOPath, _ := cmd.Flags().GetString("base-iso")
 		skipVerify, _ := cmd.Flags().GetBool("skip-verify")
+		force, _ := cmd.Flags().GetBool("force")
 
 		// 构建生成选项
 		options := &iso.GenerateOptions{
-			OutputPath:    outputPath,
-			BaseISOPath:   baseISOPath,
-			SkipVerify:    skipVerify,
+			OutputPath:  outputPath,
+			BaseISOPath: baseISOPath,
+			SkipVerify:  skipVerify,
+			Force:       force,
 		}
 
 		// 执行 ISO 生成
@@ -83,7 +85,7 @@ var generateISOCmd = &cobra.Command{
 		fmt.Printf("📁 安装文件位置: %s/installation/\n", clusterDir)
 		fmt.Printf("💿 ISO 文件位置: %s/installation/iso/\n", clusterDir)
 		fmt.Printf("🔧 Ignition 文件位置: %s/installation/ignition/\n", clusterDir)
-		
+
 		return nil
 	},
 }
@@ -95,4 +97,5 @@ func init() {
 	generateISOCmd.Flags().StringP("output", "o", "", "指定输出目录 (可选)")
 	generateISOCmd.Flags().StringP("base-iso", "b", "", "指定基础 ISO 路径 (可选)")
 	generateISOCmd.Flags().BoolP("skip-verify", "", false, "跳过镜像验证步骤")
-} 
+	generateISOCmd.Flags().BoolP("force", "", false, "强制重新生成，即使集群已就绪")
+}

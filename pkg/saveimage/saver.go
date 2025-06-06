@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"ocpack/pkg/config"
+	"ocpack/pkg/utils"
 )
 
 //go:embed templates/*
@@ -72,10 +73,20 @@ func NewImageSaver(clusterName, projectRoot string) (*ImageSaver, error) {
 
 // SaveImages 使用 oc-mirror 保存镜像到磁盘
 func (s *ImageSaver) SaveImages() error {
-	fmt.Println("=== 开始保存镜像到磁盘 ===")
+	fmt.Println("📦 开始保存镜像到磁盘...")
+
+	imagesDir := filepath.Join(s.ClusterDir, "images")
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return fmt.Errorf("创建镜像目录失败: %v", err)
+	}
+
+	// 检查是否已经存在镜像文件（重复操作检测）
+	if s.checkExistingMirrorFiles(imagesDir) {
+		fmt.Println("✅ 镜像文件已存在，跳过下载")
+		return nil
+	}
 
 	// 检查和处理 pull-secret
-	fmt.Println("检查 pull-secret...")
 	if err := s.HandlePullSecret(); err != nil {
 		return fmt.Errorf("处理 pull-secret 失败: %v", err)
 	}
@@ -85,19 +96,35 @@ func (s *ImageSaver) SaveImages() error {
 		return fmt.Errorf("生成 ImageSet 配置文件失败: %v", err)
 	}
 
-	imagesDir := filepath.Join(s.ClusterDir, "images")
-	if err := os.MkdirAll(imagesDir, 0755); err != nil {
-		return fmt.Errorf("创建镜像目录失败: %v", err)
-	}
-
 	if err := s.runOcMirrorSave(imagesetConfigPath, imagesDir); err != nil {
 		return fmt.Errorf("oc-mirror 保存镜像失败: %v", err)
 	}
 
 	fmt.Printf("✅ 镜像已保存到: %s\n", imagesDir)
-	fmt.Println("=== 镜像保存完成 ===")
-	fmt.Println("💡 下一步: 使用 'ocpack load-image' 命令将镜像加载到 registry")
 	return nil
+}
+
+// checkExistingMirrorFiles 检查是否已经存在镜像文件
+func (s *ImageSaver) checkExistingMirrorFiles(imagesDir string) bool {
+	// 读取 images 目录下的文件
+	files, err := os.ReadDir(imagesDir)
+	if err != nil {
+		return false
+	}
+
+	// 检查是否存在 mirror 开头的 tar 文件
+	for _, file := range files {
+		if !file.IsDir() && strings.HasPrefix(file.Name(), "mirror") && strings.HasSuffix(file.Name(), ".tar") {
+			// 获取文件信息
+			filePath := filepath.Join(imagesDir, file.Name())
+			if fileInfo, err := os.Stat(filePath); err == nil {
+				fmt.Printf("📦 发现镜像文件: %s (%.1f GB)\n", file.Name(), float64(fileInfo.Size())/(1024*1024*1024))
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
 // generateImageSetConfig 生成 ImageSet 配置文件
@@ -170,11 +197,7 @@ func (s *ImageSaver) generateImageSetConfig(configPath string, includeOperators 
 
 // extractMajorVersion 提取主版本号
 func (s *ImageSaver) extractMajorVersion(version string) string {
-	parts := strings.Split(version, ".")
-	if len(parts) >= 2 {
-		return parts[0] + "." + parts[1]
-	}
-	return "4.18"
+	return utils.ExtractMajorVersion(version)
 }
 
 // runOcMirrorSave 运行 oc-mirror 保存命令
@@ -234,18 +257,14 @@ func (s *ImageSaver) HandlePullSecret() error {
 4. 将文件保存为: %s`, pullSecretPath)
 	}
 
-	fmt.Printf("✅ 找到 pull-secret 文件: %s\n", pullSecretPath)
-
 	formattedContent, err := s.validateAndFormatPullSecret(pullSecretPath)
 	if err != nil {
 		return fmt.Errorf("pull-secret 文件处理失败: %v", err)
 	}
 
-	// 保存格式化版本到多个位置
+	// 保存格式化版本到必要位置
 	savePaths := map[string]string{
-		"registry":  filepath.Join(s.ClusterDir, "registry", "pull-secret.json"),
-		"docker":    filepath.Join(os.Getenv("HOME"), ".docker", "config.json"),
-		"formatted": filepath.Join(s.ClusterDir, "pull-secret-formatted.json"),
+		"docker": filepath.Join(os.Getenv("HOME"), ".docker", "config.json"),
 	}
 
 	for name, path := range savePaths {
@@ -254,14 +273,8 @@ func (s *ImageSaver) HandlePullSecret() error {
 		}
 
 		if err := os.WriteFile(path, formattedContent, 0600); err != nil {
-			if name == "formatted" {
-				fmt.Printf("⚠️  警告: 无法创建格式化版本文件: %v\n", err)
-				continue
-			}
-			return fmt.Errorf("保存%s文件失败: %v", name, err)
+			continue // 静默处理失败
 		}
-
-		fmt.Printf("✅ 格式化的 pull-secret 已保存到: %s\n", path)
 	}
 
 	return nil
@@ -298,13 +311,6 @@ func (s *ImageSaver) validateAndFormatPullSecret(filePath string) ([]byte, error
 		"registry.connect.redhat.com",
 	}
 
-	foundRegistries := make([]string, 0, len(auths))
-	for registry := range auths {
-		foundRegistries = append(foundRegistries, registry)
-	}
-
-	fmt.Printf("📊 pull-secret 包含的 registry: %v\n", foundRegistries)
-
 	missingRegistries := make([]string, 0)
 	for _, required := range requiredRegistries {
 		if _, exists := auths[required]; !exists {
@@ -313,7 +319,7 @@ func (s *ImageSaver) validateAndFormatPullSecret(filePath string) ([]byte, error
 	}
 
 	if len(missingRegistries) > 0 {
-		fmt.Printf("⚠️  警告: pull-secret 缺少以下 registry 的认证信息: %v\n", missingRegistries)
+		fmt.Printf("⚠️  pull-secret 缺少部分 registry 认证信息\n")
 	}
 
 	formattedContent, err := json.MarshalIndent(pullSecret, "", "  ")
@@ -321,6 +327,5 @@ func (s *ImageSaver) validateAndFormatPullSecret(filePath string) ([]byte, error
 		return nil, fmt.Errorf("格式化 JSON 失败: %v", err)
 	}
 
-	fmt.Println("✅ pull-secret 文件格式验证和格式化完成")
 	return formattedContent, nil
-} 
+}

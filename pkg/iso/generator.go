@@ -1,10 +1,12 @@
 package iso
 
 import (
+	"crypto/tls"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"ocpack/pkg/config"
+	"ocpack/pkg/utils"
 )
 
 //go:embed templates/*
@@ -33,6 +36,7 @@ type GenerateOptions struct {
 	OutputPath  string
 	BaseISOPath string
 	SkipVerify  bool
+	Force       bool
 }
 
 // InstallConfigData install-config.yaml 模板数据
@@ -96,30 +100,36 @@ func NewISOGenerator(clusterName, projectRoot string) (*ISOGenerator, error) {
 
 // GenerateISO 生成 ISO 镜像
 func (g *ISOGenerator) GenerateISO(options *GenerateOptions) error {
-	fmt.Printf("开始为集群 %s 生成 ISO 镜像\n", g.ClusterName)
 
-	// 1. 验证配置和依赖
+	// 1. 检查集群是否已就绪
+	if !options.Force && g.isClusterReady() {
+		fmt.Printf("✅ 集群已就绪，跳过ISO生成\n")
+		fmt.Printf("💡 如需重新生成，请使用 --force 选项\n")
+		return nil
+	}
+
+	// 2. 验证配置和依赖
 	if err := g.ValidateConfig(); err != nil {
 		return fmt.Errorf("配置验证失败: %v", err)
 	}
 
-	// 2. 创建安装目录结构
+	// 3. 创建安装目录结构
 	installDir := filepath.Join(g.ClusterDir, "installation")
 	if err := g.createInstallationDirs(installDir); err != nil {
 		return fmt.Errorf("创建安装目录失败: %v", err)
 	}
 
-	// 3. 生成 install-config.yaml
+	// 4. 生成 install-config.yaml
 	if err := g.generateInstallConfig(installDir); err != nil {
 		return fmt.Errorf("生成 install-config.yaml 失败: %v", err)
 	}
 
-	// 4. 生成 agent-config.yaml
+	// 5. 生成 agent-config.yaml
 	if err := g.generateAgentConfig(installDir); err != nil {
 		return fmt.Errorf("生成 agent-config.yaml 失败: %v", err)
 	}
 
-	// 5. 生成 ISO 文件
+	// 6. 生成 ISO 文件
 	if err := g.generateISOFiles(installDir, options); err != nil {
 		return fmt.Errorf("生成 ISO 文件失败: %v", err)
 	}
@@ -172,13 +182,10 @@ func (g *ISOGenerator) createInstallationDirs(installDir string) error {
 
 // generateInstallConfig 生成 install-config.yaml
 func (g *ISOGenerator) generateInstallConfig(installDir string) error {
-	fmt.Println("生成 install-config.yaml...")
-
 	configPath := filepath.Join(installDir, "install-config.yaml")
 
 	// 清理可能存在的旧配置文件
 	if _, err := os.Stat(configPath); err == nil {
-		fmt.Printf("🧹 清理旧的 install-config.yaml 文件: %s\n", configPath)
 		if err := os.Remove(configPath); err != nil {
 			fmt.Printf("⚠️  清理旧文件失败: %v\n", err)
 		}
@@ -192,16 +199,13 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 	mergedAuthPath := filepath.Join(g.ClusterDir, "registry", "merged-auth.json")
 	if _, err := os.Stat(mergedAuthPath); err == nil {
 		// 如果存在合并的认证文件，使用它
-		fmt.Printf("📋 使用合并的认证文件: %s\n", mergedAuthPath)
 		pullSecretBytes, err = os.ReadFile(mergedAuthPath)
 		if err != nil {
 			return fmt.Errorf("读取合并认证文件失败: %v", err)
 		}
 	} else {
 		// 如果合并认证文件不存在，先创建它
-		fmt.Printf("📋 合并认证文件不存在，正在创建...\n")
 		if err := g.createMergedAuthConfig(); err != nil {
-			fmt.Printf("⚠️  创建合并认证文件失败: %v，使用原始 pull-secret\n", err)
 			// 如果创建失败，使用原始的 pull-secret.txt
 			pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
 			pullSecretBytes, err = os.ReadFile(pullSecretPath)
@@ -210,7 +214,6 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 			}
 		} else {
 			// 创建成功，读取合并认证文件
-			fmt.Printf("📋 使用新创建的合并认证文件: %s\n", mergedAuthPath)
 			pullSecretBytes, err = os.ReadFile(mergedAuthPath)
 			if err != nil {
 				return fmt.Errorf("读取合并认证文件失败: %v", err)
@@ -219,11 +222,10 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 	}
 	pullSecret := strings.TrimSpace(string(pullSecretBytes))
 
-	// 读取 SSH 公钥（如果存在）
+	// 读取 SSH 公钥（如果不存在则创建）
 	sshKeyPub := ""
-	sshKeyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa.pub")
-	if sshKeyBytes, err := os.ReadFile(sshKeyPath); err == nil {
-		sshKeyPub = strings.TrimSpace(string(sshKeyBytes))
+	if publicKey, err := utils.GetSSHPublicKey(); err == nil {
+		sshKeyPub = publicKey
 	}
 
 	// 读取额外的信任证书（如果存在）
@@ -236,7 +238,6 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 	// 查找并解析 ICSP 文件
 	imageContentSources, err := g.findAndParseICSP()
 	if err != nil {
-		fmt.Printf("⚠️  查找 ICSP 文件失败: %v\n", err)
 		imageContentSources = ""
 	}
 
@@ -256,14 +257,6 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 		ArchShort:             "amd64",
 		UseProxy:              false,
 	}
-
-	fmt.Printf("🔧 install-config 模板数据:\n")
-	fmt.Printf("  - BaseDomain: %s\n", data.BaseDomain)
-	fmt.Printf("  - ClusterName: %s\n", data.ClusterName)
-	fmt.Printf("  - NumWorkers: %d\n", data.NumWorkers)
-	fmt.Printf("  - NumMasters: %d\n", data.NumMasters)
-	fmt.Printf("  - MachineNetwork: %s\n", data.MachineNetwork)
-	fmt.Printf("  - PrefixLength: %d\n", data.PrefixLength)
 
 	// 读取模板
 	tmplContent, err := templates.ReadFile("templates/install-config.yaml")
@@ -301,20 +294,12 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 		return fmt.Errorf("生成 install-config.yaml 失败: %v", err)
 	}
 
-	fmt.Printf("✅ install-config.yaml 已生成: %s\n", configPath)
-
-	// 调试：显示生成的 install-config.yaml 完整内容
-	if generatedContent, err := os.ReadFile(configPath); err == nil {
-		fmt.Printf("🔍 生成的 install-config.yaml 内容:\n%s\n", string(generatedContent))
-	}
-
+	fmt.Printf("✅ install-config.yaml 已生成\n")
 	return nil
 }
 
 // generateAgentConfig 生成 agent-config.yaml
 func (g *ISOGenerator) generateAgentConfig(installDir string) error {
-	fmt.Println("生成 agent-config.yaml...")
-
 	// 构建主机配置
 	var hosts []HostConfig
 
@@ -384,14 +369,12 @@ func (g *ISOGenerator) generateAgentConfig(installDir string) error {
 		return fmt.Errorf("生成 agent-config.yaml 失败: %v", err)
 	}
 
-	fmt.Printf("✅ agent-config.yaml 已生成: %s\n", configPath)
+	fmt.Printf("✅ agent-config.yaml 已生成\n")
 	return nil
 }
 
 // generateISOFiles 生成 ISO 文件
 func (g *ISOGenerator) generateISOFiles(installDir string, options *GenerateOptions) error {
-	fmt.Println("生成 ISO 文件...")
-
 	// 1. 验证 registry 中的 release image（可选）
 	if !options.SkipVerify {
 		if err := g.verifyReleaseImage(); err != nil {
@@ -430,12 +413,11 @@ func (g *ISOGenerator) generateISOFiles(installDir string, options *GenerateOpti
 	}
 
 	// 生成 agent ISO
+	fmt.Println("🔨 生成 ISO 文件...")
 	cmd := exec.Command(openshiftInstallPath, "agent", "create", "image", "--dir", tempDir)
 	cmd.Dir = tempDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
-	fmt.Printf("执行命令: %s agent create image --dir %s\n", openshiftInstallPath, tempDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("生成 agent ISO 失败: %v", err)
@@ -450,7 +432,7 @@ func (g *ISOGenerator) generateISOFiles(installDir string, options *GenerateOpti
 		return fmt.Errorf("移动 ISO 文件失败: %v", err)
 	}
 
-	// 复制 ignition 文件
+	// 复制 ignition 文件和状态文件到监控目录
 	ignitionDir := filepath.Join(installDir, "ignition")
 	tempIgnitionFiles := []string{"auth", ".openshift_install.log", ".openshift_install_state.json"}
 
@@ -470,8 +452,6 @@ func (g *ISOGenerator) generateISOFiles(installDir string, options *GenerateOpti
 
 // verifyReleaseImage 验证 registry 中的 release image
 func (g *ISOGenerator) verifyReleaseImage() error {
-	fmt.Println("验证 registry 中的 release image...")
-
 	// 获取 openshift-install 版本信息
 	openshiftInstallPath := filepath.Join(g.DownloadDir, "bin", "openshift-install")
 	cmd := exec.Command(openshiftInstallPath, "version")
@@ -480,30 +460,18 @@ func (g *ISOGenerator) verifyReleaseImage() error {
 		return fmt.Errorf("获取 openshift-install 版本失败: %v", err)
 	}
 
-	// 打印原始输出用于调试
-	versionInfo := string(output)
-	fmt.Printf("🔍 openshift-install version 输出:\n%s\n", versionInfo)
-
 	// 解析版本信息
+	versionInfo := string(output)
 	releaseVer := g.extractVersionFromOutput(versionInfo, "openshift-install")
 	releaseSHA := g.extractSHAFromOutput(versionInfo)
 
-	fmt.Printf("📋 提取的版本信息:\n")
-	fmt.Printf("  - 配置文件版本: %s\n", g.Config.ClusterInfo.OpenShiftVersion)
-	fmt.Printf("  - 工具版本: %s\n", releaseVer)
-	fmt.Printf("  - Release SHA: %s\n", releaseSHA)
-
 	// 检查是否成功提取版本信息
 	if releaseVer == "" {
-		fmt.Printf("⚠️  警告: 无法从 openshift-install 输出中提取版本号\n")
-		fmt.Printf("💡 尝试其他方法提取版本信息...\n")
-
 		// 尝试其他可能的前缀
 		alternativePrefixes := []string{"openshift-install", "Client Version:", "version"}
 		for _, prefix := range alternativePrefixes {
 			releaseVer = g.extractVersionFromOutput(versionInfo, prefix)
 			if releaseVer != "" {
-				fmt.Printf("✅ 使用前缀 '%s' 成功提取版本: %s\n", prefix, releaseVer)
 				break
 			}
 		}
@@ -511,22 +479,11 @@ func (g *ISOGenerator) verifyReleaseImage() error {
 		// 如果仍然无法提取，尝试正则表达式
 		if releaseVer == "" {
 			releaseVer = g.extractVersionWithRegex(versionInfo)
-			if releaseVer != "" {
-				fmt.Printf("✅ 使用正则表达式成功提取版本: %s\n", releaseVer)
-			}
 		}
 	}
 
 	if releaseSHA == "" {
 		return fmt.Errorf("无法从 openshift-install 输出中提取 release SHA")
-	}
-
-	// 检查配置版本是否匹配
-	if releaseVer != "" && g.Config.ClusterInfo.OpenShiftVersion != releaseVer {
-		fmt.Printf("⚠️  版本不匹配警告:\n")
-		fmt.Printf("  - 配置文件版本: %s\n", g.Config.ClusterInfo.OpenShiftVersion)
-		fmt.Printf("  - 工具版本: %s\n", releaseVer)
-		fmt.Printf("💡 继续使用配置文件中的版本进行验证...\n")
 	}
 
 	// 构建 registry 信息
@@ -537,13 +494,13 @@ func (g *ISOGenerator) verifyReleaseImage() error {
 	releaseImageURL := fmt.Sprintf("%s:%s/openshift/release-images%s",
 		registryHost, registryPort, releaseSHA)
 
-	fmt.Printf("🔍 验证 release image: %s\n", releaseImageURL)
+	fmt.Printf("🔍 验证 release image...\n")
 
 	if err := g.verifyImageExists(releaseImageURL); err != nil {
 		return fmt.Errorf("registry 中缺少 release image: %s\n请确保已运行 'ocpack load-image' 命令加载镜像", releaseImageURL)
 	}
 
-	fmt.Printf("✅ Release image 验证成功: %s\n", releaseImageURL)
+	fmt.Printf("✅ Release image 验证成功\n")
 	return nil
 }
 
@@ -562,21 +519,17 @@ func (g *ISOGenerator) verifyExtractedBinary(binaryPath string) error {
 	}
 
 	versionOutput := string(output)
-	fmt.Printf("🔍 提取的 openshift-install version 输出:\n%s\n", versionOutput)
 
 	// 验证输出包含预期内容
 	if !strings.Contains(versionOutput, "openshift-install") {
 		return fmt.Errorf("二进制文件输出不包含预期的版本信息")
 	}
 
-	fmt.Printf("✅ 提取的二进制文件验证成功\n")
 	return nil
 }
 
 // generateICSPConfig 生成 ICSP 配置文件
 func (g *ISOGenerator) generateICSPConfig(registryHost, registryPort, outputFile string) error {
-	fmt.Printf("🔧 开始生成 ICSP 配置文件: %s\n", outputFile)
-
 	// 读取模板
 	tmplContent, err := templates.ReadFile("templates/icsp.yaml")
 	if err != nil {
@@ -591,8 +544,6 @@ func (g *ISOGenerator) generateICSPConfig(registryHost, registryPort, outputFile
 		RegistryHost: registryHost,
 		RegistryPort: registryPort,
 	}
-
-	fmt.Printf("🔧 ICSP 模板数据: RegistryHost=%s, RegistryPort=%s\n", registryHost, registryPort)
 
 	// 解析和执行模板
 	tmpl, err := template.New("icsp-config").Parse(string(tmplContent))
@@ -610,16 +561,9 @@ func (g *ISOGenerator) generateICSPConfig(registryHost, registryPort, outputFile
 		return fmt.Errorf("生成 ICSP 配置文件失败: %v", err)
 	}
 
-	fmt.Printf("✅ ICSP 配置文件生成成功: %s\n", outputFile)
-
 	// 验证文件是否真的创建了
 	if _, err := os.Stat(outputFile); err != nil {
 		return fmt.Errorf("ICSP 配置文件创建后无法访问: %v", err)
-	}
-
-	// 显示生成的文件内容
-	if content, err := os.ReadFile(outputFile); err == nil {
-		fmt.Printf("🔍 生成的 ICSP 配置内容:\n%s\n", string(content))
 	}
 
 	return nil
@@ -627,8 +571,6 @@ func (g *ISOGenerator) generateICSPConfig(registryHost, registryPort, outputFile
 
 // verifyImageExists 验证镜像是否存在于 registry 中
 func (g *ISOGenerator) verifyImageExists(imageURL string) error {
-	fmt.Printf("🔍 使用 skopeo 验证镜像: %s\n", imageURL)
-
 	// 使用 skopeo 检查镜像是否存在
 	cmd := exec.Command("skopeo", "inspect", "--tls-verify=false", fmt.Sprintf("docker://%s", imageURL))
 
@@ -638,14 +580,8 @@ func (g *ISOGenerator) verifyImageExists(imageURL string) error {
 	cmd.Stderr = &stderr
 
 	// 第一次尝试
-	fmt.Printf("📋 执行命令: %s\n", strings.Join(cmd.Args, " "))
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("⚠️  第一次检查失败: %v\n", err)
-		fmt.Printf("📋 标准输出: %s\n", stdout.String())
-		fmt.Printf("📋 错误输出: %s\n", stderr.String())
-
 		// 等待 10 秒后重试
-		fmt.Println("⏳ 10秒后重试...")
 		time.Sleep(10 * time.Second)
 
 		// 重置输出缓冲区
@@ -657,25 +593,11 @@ func (g *ISOGenerator) verifyImageExists(imageURL string) error {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		fmt.Printf("📋 第二次执行命令: %s\n", strings.Join(cmd.Args, " "))
 		if err := cmd.Run(); err != nil {
-			fmt.Printf("❌ 第二次检查也失败: %v\n", err)
-			fmt.Printf("📋 标准输出: %s\n", stdout.String())
-			fmt.Printf("📋 错误输出: %s\n", stderr.String())
-
-			// 提供详细的故障排除建议
-			fmt.Printf("\n🔧 故障排除建议:\n")
-			fmt.Printf("1. 检查 registry 是否可访问: curl -k https://%s/v2/\n", strings.Split(imageURL, "/")[0])
-			fmt.Printf("2. 检查镜像是否真的存在: skopeo inspect --tls-verify=false docker://%s\n", imageURL)
-			fmt.Printf("3. 检查网络连接和防火墙设置\n")
-			fmt.Printf("4. 检查 registry 认证配置\n")
-
-			return fmt.Errorf("镜像不存在或无法访问: %s\n详细错误: %v\n错误输出: %s", imageURL, err, stderr.String())
+			return fmt.Errorf("镜像不存在或无法访问: %s", imageURL)
 		}
 	}
 
-	fmt.Printf("✅ 镜像验证成功: %s\n", imageURL)
-	fmt.Printf("📋 镜像信息: %s\n", stdout.String())
 	return nil
 }
 
@@ -683,101 +605,37 @@ func (g *ISOGenerator) verifyImageExists(imageURL string) error {
 
 // extractNetworkBase 提取网络基地址
 func (g *ISOGenerator) extractNetworkBase(cidr string) string {
-	parts := strings.Split(cidr, "/")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-	return cidr
+	return utils.ExtractNetworkBase(cidr)
 }
 
 // extractPrefixLength 提取前缀长度
 func (g *ISOGenerator) extractPrefixLength(cidr string) int {
-	parts := strings.Split(cidr, "/")
-	if len(parts) == 2 {
-		if prefix := parts[1]; prefix != "" {
-			// 简单转换，实际应该使用 strconv.Atoi
-			switch prefix {
-			case "24":
-				return 24
-			case "16":
-				return 16
-			case "8":
-				return 8
-			default:
-				return 24
-			}
-		}
-	}
-	return 24
+	return utils.ExtractPrefixLength(cidr)
 }
 
 // extractGateway 提取网关地址（假设是网络的第一个地址）
 func (g *ISOGenerator) extractGateway(cidr string) string {
-	networkBase := g.extractNetworkBase(cidr)
-	parts := strings.Split(networkBase, ".")
-	if len(parts) == 4 {
-		// 假设网关是 .1
-		return fmt.Sprintf("%s.%s.%s.1", parts[0], parts[1], parts[2])
-	}
-	return networkBase
+	return utils.ExtractGateway(cidr)
 }
 
 // copyFile 复制文件
 func (g *ISOGenerator) copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = dstFile.ReadFrom(srcFile)
-	return err
+	return utils.CopyFile(src, dst)
 }
 
 // moveFile 移动文件
 func (g *ISOGenerator) moveFile(src, dst string) error {
-	return os.Rename(src, dst)
+	return utils.MoveFile(src, dst)
 }
 
 // copyFileOrDir 复制文件或目录
 func (g *ISOGenerator) copyFileOrDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if srcInfo.IsDir() {
-		return g.copyDir(src, dst)
-	}
-	return g.copyFile(src, dst)
+	return utils.CopyFileOrDir(src, dst)
 }
 
 // copyDir 复制目录
 func (g *ISOGenerator) copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, info.Mode())
-		}
-
-		return g.copyFile(path, dstPath)
-	})
+	return utils.CopyDir(src, dst)
 }
 
 // findAndParseICSP 查找并解析 ICSP 文件
@@ -794,8 +652,6 @@ func (g *ISOGenerator) findAndParseICSP() (string, error) {
 		}
 	}
 
-	fmt.Printf("🔍 使用 oc-mirror workspace 目录: %s\n", workspaceDir)
-
 	// 查找最新的 results 目录
 	latestResultsDir, err := g.findLatestResultsDir(workspaceDir)
 	if err != nil {
@@ -807,8 +663,6 @@ func (g *ISOGenerator) findAndParseICSP() (string, error) {
 	if _, err := os.Stat(icspFile); os.IsNotExist(err) {
 		return "", fmt.Errorf("ICSP 文件不存在: %s", icspFile)
 	}
-
-	fmt.Printf("📄 找到 ICSP 文件: %s\n", icspFile)
 
 	// 读取并解析 ICSP 文件
 	icspContent, err := os.ReadFile(icspFile)
@@ -822,7 +676,6 @@ func (g *ISOGenerator) findAndParseICSP() (string, error) {
 		return "", fmt.Errorf("解析 ICSP 内容失败: %v", err)
 	}
 
-	fmt.Printf("✅ 成功解析 ICSP 文件，包含 %d 个镜像源配置\n", strings.Count(imageContentSources, "- mirrors:"))
 	return imageContentSources, nil
 }
 
@@ -973,18 +826,14 @@ func (g *ISOGenerator) formatMirrorConfig(mirror, source string) string {
 
 // extractOpenshiftInstall 从 registry 提取 openshift-install 二进制文件
 func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
-	fmt.Println("从 registry 提取 openshift-install 二进制文件...")
-
 	// 构建 registry 信息
 	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
-	registryPort := "8443"
 
 	// 检查是否已经提取过
 	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("openshift-install-%s-%s",
 		g.Config.ClusterInfo.OpenShiftVersion, registryHost))
 
 	if _, err := os.Stat(extractedBinary); err == nil {
-		fmt.Printf("✅ openshift-install 已存在: %s\n", extractedBinary)
 		return extractedBinary, nil
 	}
 
@@ -997,20 +846,15 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 	}
 
 	versionOutput := string(output)
-	fmt.Printf("🔍 openshift-install version 输出:\n%s\n", versionOutput)
-
 	releaseSHA := g.extractSHAFromOutput(versionOutput)
 	if releaseSHA == "" {
 		return "", fmt.Errorf("无法从 openshift-install 输出中提取 release SHA")
 	}
 
-	fmt.Printf("📋 Release SHA: %s\n", releaseSHA)
-
 	// 构建 release image URL
+	registryPort := "8443"
 	releaseImageURL := fmt.Sprintf("%s:%s/openshift/release-images%s",
 		registryHost, registryPort, releaseSHA)
-
-	fmt.Printf("🔍 Release image URL: %s\n", releaseImageURL)
 
 	// 使用 oc 提取 openshift-install
 	ocPath := filepath.Join(g.DownloadDir, "bin", "oc")
@@ -1028,11 +872,9 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 		// 尝试使用系统的 Docker 配置文件
 		dockerConfigPath := filepath.Join(os.Getenv("HOME"), ".docker", "config.json")
 		if _, err := os.Stat(dockerConfigPath); err == nil {
-			fmt.Printf("⚠️  合并的认证文件不存在: %s，使用系统 Docker 配置: %s\n", mergedAuthPath, dockerConfigPath)
 			mergedAuthPath = dockerConfigPath
 		} else {
 			// 最后尝试使用默认的 pull-secret.txt
-			fmt.Printf("⚠️  Docker 配置不存在: %s，尝试使用默认的 pull-secret.txt\n", dockerConfigPath)
 			mergedAuthPath = filepath.Join(g.ClusterDir, "pull-secret.txt")
 		}
 	}
@@ -1049,12 +891,9 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 	extractCmd.Stdout = os.Stdout
 	extractCmd.Stderr = os.Stderr
 
-	fmt.Printf("执行命令: %s\n", strings.Join(extractCmd.Args, " "))
-
 	// 执行提取命令
 	if err := extractCmd.Run(); err != nil {
-		fmt.Printf("⚠️  从 registry 提取失败: %v\n", err)
-		fmt.Printf("💡 这在某些版本中是正常的，将使用下载的 openshift-install\n")
+		// 如果提取失败，回退到使用下载的版本
 		return filepath.Join(g.DownloadDir, "bin", "openshift-install"), nil
 	}
 
@@ -1071,12 +910,8 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 			return "", fmt.Errorf("设置可执行权限失败: %v", err)
 		}
 
-		fmt.Printf("✅ 成功从 registry 提取 openshift-install: %s\n", extractedBinary)
-
 		// 验证提取的二进制文件
 		if err := g.verifyExtractedBinary(extractedBinary); err != nil {
-			fmt.Printf("⚠️  提取的二进制文件验证失败: %v\n", err)
-			fmt.Printf("💡 使用下载的 openshift-install\n")
 			return filepath.Join(g.DownloadDir, "bin", "openshift-install"), nil
 		}
 
@@ -1084,170 +919,37 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 	}
 
 	// 如果提取失败，回退到使用下载的版本
-	fmt.Printf("⚠️  从 registry 提取失败，使用下载的 openshift-install\n")
 	return filepath.Join(g.DownloadDir, "bin", "openshift-install"), nil
 }
 
 // compareVersion 比较两个版本号
 func (g *ISOGenerator) compareVersion(v1, v2 string) int {
-	parts1 := g.parseVersion(v1)
-	parts2 := g.parseVersion(v2)
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		p1, p2 := 0, 0
-		if i < len(parts1) {
-			p1 = parts1[i]
-		}
-		if i < len(parts2) {
-			p2 = parts2[i]
-		}
-
-		if p1 != p2 {
-			if p1 < p2 {
-				return -1
-			}
-			return 1
-		}
-	}
-
-	return 0
+	return utils.CompareVersion(v1, v2)
 }
 
 // parseVersion 解析版本号为整数数组
 func (g *ISOGenerator) parseVersion(version string) []int {
-	if version == "" {
-		return []int{0}
-	}
-
-	parts := strings.Split(version, ".")
-	result := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		// 提取数字部分
-		var numStr strings.Builder
-		for _, char := range part {
-			if char >= '0' && char <= '9' {
-				numStr.WriteRune(char)
-			} else {
-				break
-			}
-		}
-
-		if numStr.Len() > 0 {
-			if num, err := strconv.Atoi(numStr.String()); err == nil {
-				result = append(result, num)
-			}
-		}
-	}
-
-	if len(result) == 0 {
-		return []int{0}
-	}
-
-	return result
+	return utils.ParseVersion(version)
 }
 
 // extractVersionFromOutput 从 openshift-install version 输出中提取版本号
 func (g *ISOGenerator) extractVersionFromOutput(output, prefix string) string {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				// 提取版本号，去掉可能的前缀
-				version := parts[1]
-				// 如果版本号包含 "v" 前缀，去掉它
-				if strings.HasPrefix(version, "v") {
-					version = version[1:]
-				}
-				return version
-			}
-		}
-	}
-	return ""
+	return utils.ExtractVersionFromOutput(output, prefix)
 }
 
 // extractSHAFromOutput 从 openshift-install version 输出中提取 release SHA
 func (g *ISOGenerator) extractSHAFromOutput(output string) string {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "release image") && strings.Contains(line, "@sha") {
-			// 提取 @sha256:... 部分
-			shaIndex := strings.Index(line, "@sha")
-			if shaIndex != -1 {
-				return line[shaIndex:]
-			}
-		}
-	}
-	return ""
+	return utils.ExtractSHAFromOutput(output)
 }
 
 // extractVersionWithRegex 使用正则表达式从输出中提取版本号
 func (g *ISOGenerator) extractVersionWithRegex(output string) string {
-	// 匹配版本号模式，如 4.14.0, v4.14.0 等
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// 查找包含版本号的行
-		if strings.Contains(line, "4.") {
-			// 提取版本号模式 x.y.z
-			parts := strings.Fields(line)
-			for _, part := range parts {
-				// 移除可能的前缀
-				part = strings.TrimPrefix(part, "v")
-				// 检查是否匹配版本号格式
-				if g.isValidVersionFormat(part) {
-					return part
-				}
-			}
-		}
-	}
-	return ""
+	return utils.ExtractVersionWithRegex(output)
 }
 
 // isValidVersionFormat 检查字符串是否为有效的版本号格式
 func (g *ISOGenerator) isValidVersionFormat(version string) bool {
-	if version == "" {
-		return false
-	}
-
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
-		return false
-	}
-
-	// 检查每个部分是否为数字
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		// 检查是否包含数字
-		hasDigit := false
-		for _, char := range part {
-			if char >= '0' && char <= '9' {
-				hasDigit = true
-			} else if char != '.' && char != '-' && char != '+' {
-				// 如果包含其他字符，只允许在末尾
-				break
-			}
-		}
-		if !hasDigit {
-			return false
-		}
-	}
-
-	return true
+	return utils.IsValidVersionFormat(version)
 }
 
 // createMergedAuthConfig 创建合并的认证配置文件
@@ -1314,4 +1016,35 @@ func (g *ISOGenerator) createMergedAuthConfig() error {
 
 	fmt.Printf("📋 已添加 registry 认证: %s\n", registryURL)
 	return nil
+}
+
+// 检查集群是否已就绪
+func (g *ISOGenerator) isClusterReady() bool {
+	// 检查API是否可访问
+	apiURL := fmt.Sprintf("https://api.%s.%s:6443/version", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	if g.checkURL(apiURL) {
+		return true
+	}
+
+	// 检查控制台是否可访问
+	consoleURL := fmt.Sprintf("https://console-openshift-console.apps.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	return g.checkURL(consoleURL)
+}
+
+// 检查URL是否可访问
+func (g *ISOGenerator) checkURL(url string) bool {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusFound
 }
