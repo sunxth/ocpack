@@ -18,6 +18,9 @@ var bastionAnsibleFiles embed.FS
 //go:embed ansible/registry/*
 var registryAnsibleFiles embed.FS
 
+//go:embed ansible/pxe/*
+var pxeAnsibleFiles embed.FS
+
 // AnsibleExecutor 处理 Ansible playbook 的执行
 type AnsibleExecutor struct {
 	config         *config.ClusterConfig
@@ -91,7 +94,7 @@ func (ae *AnsibleExecutor) ExtractBastionFiles() error {
 // GenerateInventory 生成 Ansible inventory 文件
 func (ae *AnsibleExecutor) GenerateInventory() error {
 	inventoryTemplatePath := filepath.Join(ae.workDir, "ansible/bastion/inventory.ini")
-	
+
 	// 读取模板文件
 	templateContent, err := os.ReadFile(inventoryTemplatePath)
 	if err != nil {
@@ -124,17 +127,17 @@ func (ae *AnsibleExecutor) GenerateInventory() error {
 // GenerateVarsFile 生成 Ansible 变量文件
 func (ae *AnsibleExecutor) GenerateVarsFile() error {
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
-	
+
 	// 获取当前工作目录（项目根目录）
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("获取当前工作目录失败: %w", err)
 	}
-	
+
 	// 获取配置文件所在的目录名
 	configDir := filepath.Dir(filepath.Join(currentDir, ae.ConfigFilePath))
 	clusterDir := filepath.Base(configDir)
-	
+
 	varsContent := fmt.Sprintf(`---
 cluster_info:
   name: "%s"
@@ -160,7 +163,8 @@ cluster:
 	for _, cp := range ae.config.Cluster.ControlPlane {
 		varsContent += fmt.Sprintf(`    - name: "%s"
       ip: "%s"
-`, cp.Name, cp.IP)
+      mac: "%s"
+`, cp.Name, cp.IP, cp.MAC)
 	}
 
 	varsContent += "  worker:\n"
@@ -168,7 +172,8 @@ cluster:
 	for _, worker := range ae.config.Cluster.Worker {
 		varsContent += fmt.Sprintf(`    - name: "%s"
       ip: "%s"
-`, worker.Name, worker.IP)
+      mac: "%s"
+`, worker.Name, worker.IP, worker.MAC)
 	}
 
 	// 添加网络配置
@@ -220,7 +225,7 @@ func (ae *AnsibleExecutor) RunBastionPlaybook() error {
 	playbookPath := filepath.Join(ae.workDir, "ansible/bastion/playbook.yml")
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
 
-	cmd := exec.Command("ansible-playbook", 
+	cmd := exec.Command("ansible-playbook",
 		"-i", ae.inventory,
 		"-e", fmt.Sprintf("@%s", varsPath),
 		playbookPath,
@@ -228,7 +233,7 @@ func (ae *AnsibleExecutor) RunBastionPlaybook() error {
 
 	// 设置工作目录
 	cmd.Dir = ae.workDir
-	
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -307,7 +312,7 @@ func (ae *AnsibleExecutor) ExtractRegistryFiles() error {
 // GenerateRegistryInventory 生成 Registry Ansible inventory 文件
 func (ae *AnsibleExecutor) GenerateRegistryInventory() error {
 	inventoryTemplatePath := filepath.Join(ae.workDir, "ansible/registry/inventory.ini")
-	
+
 	// 读取模板文件
 	templateContent, err := os.ReadFile(inventoryTemplatePath)
 	if err != nil {
@@ -363,7 +368,7 @@ func (ae *AnsibleExecutor) RunRegistryPlaybook() error {
 	playbookPath := filepath.Join(ae.workDir, "ansible/registry/playbook.yml")
 	varsPath := filepath.Join(ae.workDir, "vars.yml")
 
-	cmd := exec.Command("ansible-playbook", 
+	cmd := exec.Command("ansible-playbook",
 		"-i", ae.inventory,
 		"-e", fmt.Sprintf("@%s", varsPath),
 		playbookPath,
@@ -371,7 +376,7 @@ func (ae *AnsibleExecutor) RunRegistryPlaybook() error {
 
 	// 设置工作目录
 	cmd.Dir = ae.workDir
-	
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -385,4 +390,134 @@ func (ae *AnsibleExecutor) RunRegistryPlaybook() error {
 	}
 
 	return nil
-} 
+}
+
+// ExtractPXEFiles 提取 PXE 相关的 Ansible 文件到临时目录
+func (ae *AnsibleExecutor) ExtractPXEFiles() error {
+	// 提取所有嵌入的文件
+	err := fs.WalkDir(pxeAnsibleFiles, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// 跳过根目录
+		if path == "." {
+			return nil
+		}
+
+		// 创建目标路径
+		targetPath := filepath.Join(ae.workDir, path)
+
+		if d.IsDir() {
+			// 创建目录
+			return os.MkdirAll(targetPath, 0755)
+		}
+
+		// 读取文件内容
+		content, err := pxeAnsibleFiles.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("读取嵌入文件 %s 失败: %w", path, err)
+		}
+
+		// 确保目标目录存在
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return fmt.Errorf("创建目录 %s 失败: %w", filepath.Dir(targetPath), err)
+		}
+
+		// 写入文件
+		if err := os.WriteFile(targetPath, content, 0644); err != nil {
+			return fmt.Errorf("写入文件 %s 失败: %w", targetPath, err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("提取 Ansible 文件失败: %w", err)
+	}
+
+	return nil
+}
+
+// GeneratePXEInventory 生成 PXE Ansible inventory 文件
+func (ae *AnsibleExecutor) GeneratePXEInventory() error {
+	inventoryTemplatePath := filepath.Join(ae.workDir, "ansible/pxe/inventory.ini")
+
+	// 读取模板文件
+	templateContent, err := os.ReadFile(inventoryTemplatePath)
+	if err != nil {
+		return fmt.Errorf("读取 inventory 模板失败: %w", err)
+	}
+
+	// 解析模板
+	tmpl, err := template.New("inventory").Parse(string(templateContent))
+	if err != nil {
+		return fmt.Errorf("解析 inventory 模板失败: %w", err)
+	}
+
+	// 生成 inventory 文件
+	inventoryPath := filepath.Join(ae.workDir, "pxe_inventory")
+	inventoryFile, err := os.Create(inventoryPath)
+	if err != nil {
+		return fmt.Errorf("创建 inventory 文件失败: %w", err)
+	}
+	defer inventoryFile.Close()
+
+	// 执行模板
+	if err := tmpl.Execute(inventoryFile, ae.config); err != nil {
+		return fmt.Errorf("生成 inventory 文件失败: %w", err)
+	}
+
+	ae.inventory = inventoryPath
+	return nil
+}
+
+// RunPXEPlaybook 执行 PXE 部署 playbook
+func (ae *AnsibleExecutor) RunPXEPlaybook() error {
+	// 检查 Ansible 是否安装
+	if err := ae.CheckAnsibleInstalled(); err != nil {
+		return err
+	}
+
+	// 提取文件
+	if err := ae.ExtractPXEFiles(); err != nil {
+		return err
+	}
+
+	// 生成 inventory
+	if err := ae.GeneratePXEInventory(); err != nil {
+		return err
+	}
+
+	// 生成变量文件
+	if err := ae.GenerateVarsFile(); err != nil {
+		return err
+	}
+
+	// 执行 playbook
+	playbookPath := filepath.Join(ae.workDir, "ansible/pxe/playbook.yml")
+	varsPath := filepath.Join(ae.workDir, "vars.yml")
+
+	cmd := exec.Command("ansible-playbook",
+		"-i", ae.inventory,
+		"-e", fmt.Sprintf("@%s", varsPath),
+		playbookPath,
+	)
+
+	// 设置工作目录
+	cmd.Dir = ae.workDir
+
+	// 设置输出
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("执行 Ansible playbook: %s\n", playbookPath)
+	fmt.Printf("使用 inventory: %s\n", ae.inventory)
+	fmt.Printf("工作目录: %s\n", ae.workDir)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("执行 Ansible playbook 失败: %w", err)
+	}
+
+	return nil
+}

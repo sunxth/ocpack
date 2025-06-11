@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,22 @@ var rootCmd = &cobra.Command{
  ║     ╚██████╔╝╚██████╗██║     ██║  ██║╚██████╗██║  ██╗                         ║
  ║      ╚═════╝  ╚═════╝╚═╝     ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝                         ║
  ║                                                                               ║
- ╚═══════════════════════════════════════════════════════════════════════════════╝`,
+ ╚═══════════════════════════════════════════════════════════════════════════════╝
+
+  快速开始 (一键部署):
+     1. ocpack new cluster [集群名称]
+     2. 编辑 [集群名称]/config.toml 和 pull-secret.txt
+     3. ocpack all [集群名称]
+
+  分步部署:
+     1. ocpack new cluster [集群名称]
+     2. 编辑 [集群名称]/config.toml
+     3. ocpack download [集群名称]
+     4. ocpack save-image [集群名称]
+     5. ocpack deploy-bastion [集群名称]
+     6. ocpack deploy-registry [集群名称]
+     7. ocpack load-image [集群名称]
+     8. ocpack generate-iso [集群名称]`,
 	// 禁用自动生成的completion命令
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
@@ -50,7 +66,7 @@ func SetVersionInfo(v, c, bt string) {
 	version = v
 	commit = c
 	buildTime = bt
-	
+
 	// 设置 root 命令的版本
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, buildTime)
 }
@@ -62,11 +78,11 @@ func Execute() error {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	
+
 	// 添加版本命令
 	rootCmd.AddCommand(versionCmd)
 }
 
 func initConfig() {
 	// 配置初始化逻辑可以在这里添加
-} 
+}

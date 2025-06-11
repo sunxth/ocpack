@@ -177,6 +177,10 @@ help:
 	@echo "  make build-all       # 构建所有平台"
 	@echo "  make linux/amd64     # 只构建 Linux amd64"
 	@echo "  make release         # 创建发布包"
+	@echo ""
+	@echo "ocpack 使用示例:"
+	@echo "  ./build/ocpack new cluster demo     # 创建集群项目"
+	@echo "  ./build/ocpack all demo             # 一键部署完整流程"
 
 # 开发相关目标
 .PHONY: dev

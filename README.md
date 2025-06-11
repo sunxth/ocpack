@@ -33,13 +33,22 @@ ocpack new cluster my-cluster
 
 ### 4. 部署流程
 
+#### 一键部署（推荐）
+
+```bash
+# 一键执行完整部署流程
+ocpack all my-cluster
+```
+
+#### 分步部署
+
 ```bash
 # 下载安装介质
-ocpack download -c my-cluster/config.toml
+ocpack download my-cluster
 
 # 部署基础设施
-ocpack deploy-bastion -c my-cluster/config.toml
-ocpack deploy-registry -c my-cluster/config.toml
+ocpack deploy-bastion my-cluster
+ocpack deploy-registry my-cluster
 
 # 镜像管理
 ocpack save-image my-cluster    # 保存镜像到本地
@@ -47,6 +56,9 @@ ocpack load-image my-cluster    # 加载镜像到 registry
 
 # 生成安装 ISO
 ocpack generate-iso my-cluster
+
+# 使用 ISO 启动虚拟机后，监控安装进度
+ocpack mon my-cluster
 ```
 
 ## 配置文件示例
@@ -88,12 +100,14 @@ machine_network = "192.168.1.0/24"
 | 命令 | 说明 |
 |------|------|
 | `new cluster <name>` | 创建新的集群项目 |
-| `download` | 下载 OpenShift 安装工具 |
-| `deploy-bastion` | 部署 Bastion 节点 (DNS + HAProxy) |
-| `deploy-registry` | 部署 Registry 节点 |
-| `save-image` | 保存 OpenShift 镜像到本地 |
-| `load-image` | 加载镜像到 Registry |
-| `generate-iso` | 生成安装 ISO 镜像 |
+| `all <name>` | **一键执行完整部署流程** |
+| `download <name>` | 下载 OpenShift 安装工具 |
+| `deploy-bastion <name>` | 部署 Bastion 节点 (DNS + HAProxy) |
+| `deploy-registry <name>` | 部署 Registry 节点 |
+| `save-image <name>` | 保存 OpenShift 镜像到本地 |
+| `load-image <name>` | 加载镜像到 Registry |
+| `generate-iso <name>` | 生成安装 ISO 镜像 |
+| `mon <name>` | **监控集群安装进度** |
 
 ## 镜像管理
 

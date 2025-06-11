@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"ocpack/pkg/config"
+	"ocpack/pkg/utils"
 )
 
 //go:embed templates/*
@@ -74,6 +75,20 @@ func NewImageSaver(clusterName, projectRoot string) (*ImageSaver, error) {
 func (s *ImageSaver) SaveImages() error {
 	fmt.Println("=== 开始保存镜像到磁盘 ===")
 
+	imagesDir := filepath.Join(s.ClusterDir, "images")
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return fmt.Errorf("创建镜像目录失败: %v", err)
+	}
+
+	// 检查是否已经存在镜像文件（重复操作检测）
+	if s.checkExistingMirrorFiles(imagesDir) {
+		fmt.Println("✅ 检测到已存在的镜像文件，跳过重复下载")
+		fmt.Printf("✅ 镜像已保存到: %s\n", imagesDir)
+		fmt.Println("=== 镜像保存完成 ===")
+		fmt.Println("💡 下一步: 使用 'ocpack load-image' 命令将镜像加载到 registry")
+		return nil
+	}
+
 	// 检查和处理 pull-secret
 	fmt.Println("检查 pull-secret...")
 	if err := s.HandlePullSecret(); err != nil {
@@ -85,11 +100,6 @@ func (s *ImageSaver) SaveImages() error {
 		return fmt.Errorf("生成 ImageSet 配置文件失败: %v", err)
 	}
 
-	imagesDir := filepath.Join(s.ClusterDir, "images")
-	if err := os.MkdirAll(imagesDir, 0755); err != nil {
-		return fmt.Errorf("创建镜像目录失败: %v", err)
-	}
-
 	if err := s.runOcMirrorSave(imagesetConfigPath, imagesDir); err != nil {
 		return fmt.Errorf("oc-mirror 保存镜像失败: %v", err)
 	}
@@ -98,6 +108,37 @@ func (s *ImageSaver) SaveImages() error {
 	fmt.Println("=== 镜像保存完成 ===")
 	fmt.Println("💡 下一步: 使用 'ocpack load-image' 命令将镜像加载到 registry")
 	return nil
+}
+
+// checkExistingMirrorFiles 检查是否已经存在镜像文件
+func (s *ImageSaver) checkExistingMirrorFiles(imagesDir string) bool {
+	fmt.Println("🔍 检查是否已存在镜像文件...")
+
+	// 读取 images 目录下的文件
+	files, err := os.ReadDir(imagesDir)
+	if err != nil {
+		fmt.Printf("⚠️  读取镜像目录失败: %v\n", err)
+		return false
+	}
+
+	// 检查是否存在 mirror 开头的 tar 文件
+	for _, file := range files {
+		if !file.IsDir() && strings.HasPrefix(file.Name(), "mirror") && strings.HasSuffix(file.Name(), ".tar") {
+			fmt.Printf("📦 发现已存在的镜像文件: %s\n", file.Name())
+
+			// 获取文件信息
+			filePath := filepath.Join(imagesDir, file.Name())
+			if fileInfo, err := os.Stat(filePath); err == nil {
+				fmt.Printf("📊 文件大小: %.2f GB\n", float64(fileInfo.Size())/(1024*1024*1024))
+				fmt.Printf("📅 创建时间: %s\n", fileInfo.ModTime().Format("2006-01-02 15:04:05"))
+			}
+
+			return true
+		}
+	}
+
+	fmt.Println("📂 未发现已存在的镜像文件，需要重新下载")
+	return false
 }
 
 // generateImageSetConfig 生成 ImageSet 配置文件
@@ -170,11 +211,7 @@ func (s *ImageSaver) generateImageSetConfig(configPath string, includeOperators 
 
 // extractMajorVersion 提取主版本号
 func (s *ImageSaver) extractMajorVersion(version string) string {
-	parts := strings.Split(version, ".")
-	if len(parts) >= 2 {
-		return parts[0] + "." + parts[1]
-	}
-	return "4.18"
+	return utils.ExtractMajorVersion(version)
 }
 
 // runOcMirrorSave 运行 oc-mirror 保存命令
@@ -323,4 +360,4 @@ func (s *ImageSaver) validateAndFormatPullSecret(filePath string) ([]byte, error
 
 	fmt.Println("✅ pull-secret 文件格式验证和格式化完成")
 	return formattedContent, nil
-} 
+}

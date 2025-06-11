@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ocpack/pkg/config"
+	"ocpack/pkg/utils"
 )
 
 //go:embed templates/*
@@ -450,17 +451,30 @@ func (g *ISOGenerator) generateISOFiles(installDir string, options *GenerateOpti
 		return fmt.Errorf("移动 ISO 文件失败: %v", err)
 	}
 
-	// 复制 ignition 文件
+	// 复制 ignition 文件和状态文件到监控目录
 	ignitionDir := filepath.Join(installDir, "ignition")
 	tempIgnitionFiles := []string{"auth", ".openshift_install.log", ".openshift_install_state.json"}
 
+	fmt.Printf("📋 复制 ignition 文件到监控目录: %s\n", ignitionDir)
 	for _, file := range tempIgnitionFiles {
 		srcPath := filepath.Join(tempDir, file)
 		if _, err := os.Stat(srcPath); err == nil {
 			dstPath := filepath.Join(ignitionDir, file)
 			if err := g.copyFileOrDir(srcPath, dstPath); err != nil {
 				fmt.Printf("⚠️  复制 %s 失败: %v\n", file, err)
+			} else {
+				fmt.Printf("✅ 已复制: %s\n", file)
 			}
+		} else {
+			fmt.Printf("⚠️  文件不存在，跳过: %s\n", file)
+		}
+	}
+
+	// 确保 ignition 目录包含必要的文件用于监控
+	fmt.Printf("📋 ignition 目录内容:\n")
+	if entries, err := os.ReadDir(ignitionDir); err == nil {
+		for _, entry := range entries {
+			fmt.Printf("  - %s\n", entry.Name())
 		}
 	}
 
@@ -683,101 +697,37 @@ func (g *ISOGenerator) verifyImageExists(imageURL string) error {
 
 // extractNetworkBase 提取网络基地址
 func (g *ISOGenerator) extractNetworkBase(cidr string) string {
-	parts := strings.Split(cidr, "/")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-	return cidr
+	return utils.ExtractNetworkBase(cidr)
 }
 
 // extractPrefixLength 提取前缀长度
 func (g *ISOGenerator) extractPrefixLength(cidr string) int {
-	parts := strings.Split(cidr, "/")
-	if len(parts) == 2 {
-		if prefix := parts[1]; prefix != "" {
-			// 简单转换，实际应该使用 strconv.Atoi
-			switch prefix {
-			case "24":
-				return 24
-			case "16":
-				return 16
-			case "8":
-				return 8
-			default:
-				return 24
-			}
-		}
-	}
-	return 24
+	return utils.ExtractPrefixLength(cidr)
 }
 
 // extractGateway 提取网关地址（假设是网络的第一个地址）
 func (g *ISOGenerator) extractGateway(cidr string) string {
-	networkBase := g.extractNetworkBase(cidr)
-	parts := strings.Split(networkBase, ".")
-	if len(parts) == 4 {
-		// 假设网关是 .1
-		return fmt.Sprintf("%s.%s.%s.1", parts[0], parts[1], parts[2])
-	}
-	return networkBase
+	return utils.ExtractGateway(cidr)
 }
 
 // copyFile 复制文件
 func (g *ISOGenerator) copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = dstFile.ReadFrom(srcFile)
-	return err
+	return utils.CopyFile(src, dst)
 }
 
 // moveFile 移动文件
 func (g *ISOGenerator) moveFile(src, dst string) error {
-	return os.Rename(src, dst)
+	return utils.MoveFile(src, dst)
 }
 
 // copyFileOrDir 复制文件或目录
 func (g *ISOGenerator) copyFileOrDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if srcInfo.IsDir() {
-		return g.copyDir(src, dst)
-	}
-	return g.copyFile(src, dst)
+	return utils.CopyFileOrDir(src, dst)
 }
 
 // copyDir 复制目录
 func (g *ISOGenerator) copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, info.Mode())
-		}
-
-		return g.copyFile(path, dstPath)
-	})
+	return utils.CopyDir(src, dst)
 }
 
 // findAndParseICSP 查找并解析 ICSP 文件
@@ -1090,164 +1040,32 @@ func (g *ISOGenerator) extractOpenshiftInstall() (string, error) {
 
 // compareVersion 比较两个版本号
 func (g *ISOGenerator) compareVersion(v1, v2 string) int {
-	parts1 := g.parseVersion(v1)
-	parts2 := g.parseVersion(v2)
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		p1, p2 := 0, 0
-		if i < len(parts1) {
-			p1 = parts1[i]
-		}
-		if i < len(parts2) {
-			p2 = parts2[i]
-		}
-
-		if p1 != p2 {
-			if p1 < p2 {
-				return -1
-			}
-			return 1
-		}
-	}
-
-	return 0
+	return utils.CompareVersion(v1, v2)
 }
 
 // parseVersion 解析版本号为整数数组
 func (g *ISOGenerator) parseVersion(version string) []int {
-	if version == "" {
-		return []int{0}
-	}
-
-	parts := strings.Split(version, ".")
-	result := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		// 提取数字部分
-		var numStr strings.Builder
-		for _, char := range part {
-			if char >= '0' && char <= '9' {
-				numStr.WriteRune(char)
-			} else {
-				break
-			}
-		}
-
-		if numStr.Len() > 0 {
-			if num, err := strconv.Atoi(numStr.String()); err == nil {
-				result = append(result, num)
-			}
-		}
-	}
-
-	if len(result) == 0 {
-		return []int{0}
-	}
-
-	return result
+	return utils.ParseVersion(version)
 }
 
 // extractVersionFromOutput 从 openshift-install version 输出中提取版本号
 func (g *ISOGenerator) extractVersionFromOutput(output, prefix string) string {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				// 提取版本号，去掉可能的前缀
-				version := parts[1]
-				// 如果版本号包含 "v" 前缀，去掉它
-				if strings.HasPrefix(version, "v") {
-					version = version[1:]
-				}
-				return version
-			}
-		}
-	}
-	return ""
+	return utils.ExtractVersionFromOutput(output, prefix)
 }
 
 // extractSHAFromOutput 从 openshift-install version 输出中提取 release SHA
 func (g *ISOGenerator) extractSHAFromOutput(output string) string {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "release image") && strings.Contains(line, "@sha") {
-			// 提取 @sha256:... 部分
-			shaIndex := strings.Index(line, "@sha")
-			if shaIndex != -1 {
-				return line[shaIndex:]
-			}
-		}
-	}
-	return ""
+	return utils.ExtractSHAFromOutput(output)
 }
 
 // extractVersionWithRegex 使用正则表达式从输出中提取版本号
 func (g *ISOGenerator) extractVersionWithRegex(output string) string {
-	// 匹配版本号模式，如 4.14.0, v4.14.0 等
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// 查找包含版本号的行
-		if strings.Contains(line, "4.") {
-			// 提取版本号模式 x.y.z
-			parts := strings.Fields(line)
-			for _, part := range parts {
-				// 移除可能的前缀
-				part = strings.TrimPrefix(part, "v")
-				// 检查是否匹配版本号格式
-				if g.isValidVersionFormat(part) {
-					return part
-				}
-			}
-		}
-	}
-	return ""
+	return utils.ExtractVersionWithRegex(output)
 }
 
 // isValidVersionFormat 检查字符串是否为有效的版本号格式
 func (g *ISOGenerator) isValidVersionFormat(version string) bool {
-	if version == "" {
-		return false
-	}
-
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
-		return false
-	}
-
-	// 检查每个部分是否为数字
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		// 检查是否包含数字
-		hasDigit := false
-		for _, char := range part {
-			if char >= '0' && char <= '9' {
-				hasDigit = true
-			} else if char != '.' && char != '-' && char != '+' {
-				// 如果包含其他字符，只允许在末尾
-				break
-			}
-		}
-		if !hasDigit {
-			return false
-		}
-	}
-
-	return true
+	return utils.IsValidVersionFormat(version)
 }
 
 // createMergedAuthConfig 创建合并的认证配置文件
