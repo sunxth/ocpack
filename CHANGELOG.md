@@ -18,6 +18,13 @@
   - 友好的进度显示和状态更新
   - 简洁的命令名称 `mon`，更易于使用
 
+- 🎛️  **Ansible 输出优化**
+  - 自动配置 Ansible 环境变量以获得清洁的输出
+  - 禁用主机密钥检查，提高自动化部署体验
+  - 隐藏跳过的任务，减少输出噪音
+  - 设置最小详细程度，专注于重要信息
+  - 无需用户手动配置，开箱即用
+
 ### 修复问题
 - 🐛 **修复 SHA 提取失败问题**
   - 修复了 `ExtractSHAFromOutput` 函数无法从 `openshift-install version` 输出中提取 release SHA 的问题
@@ -68,8 +75,12 @@ vim my-cluster/config.toml
 # 准备 pull-secret.txt
 cp pull-secret.txt my-cluster/
 
-# 一键部署
+# 一键部署 (默认 ISO 模式)
 ocpack all my-cluster
+
+# 指定部署模式
+ocpack all my-cluster --mode=iso    # ISO 模式
+ocpack all my-cluster --mode=pxe    # PXE 模式
 
 # 使用 ISO 启动虚拟机后，监控安装进度
 ocpack mon my-cluster
@@ -85,7 +96,9 @@ ocpack deploy-bastion my-cluster
 ocpack deploy-registry my-cluster
 ocpack save-image my-cluster
 ocpack load-image my-cluster
-ocpack generate-iso my-cluster
+ocpack generate-iso my-cluster     # 生成 ISO 文件
+# 或
+ocpack setup-pxe my-cluster        # 设置 PXE 启动环境
 ```
 
 ## 故障排除

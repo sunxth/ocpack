@@ -2,7 +2,7 @@
 
 ## Ignition 文件生成
 
-在 `ocpack generate-iso` 过程中，会生成以下重要文件用于集群安装和监控：
+在 `ocpack generate-iso` 或 `ocpack setup-pxe` 过程中，会生成以下重要文件用于集群安装和监控：
 
 ### 生成的文件结构
 
@@ -113,7 +113,7 @@ ocpack mon my-cluster --credentials
    ```
    ❌ ignition 目录不存在: /path/to/cluster/installation/ignition
    ```
-   **解决方案**: 确保已经运行 `ocpack generate-iso` 生成了 ISO 文件
+   **解决方案**: 确保已经运行 `ocpack generate-iso` 生成了 ISO 文件或 `ocpack setup-pxe` 设置了 PXE 环境
 
 2. **找不到 openshift-install 工具**
    ```

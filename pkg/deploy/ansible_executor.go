@@ -44,6 +44,19 @@ func NewAnsibleExecutor(cfg *config.ClusterConfig, configFilePath string) (*Ansi
 	}, nil
 }
 
+// getAnsibleEnv 获取 Ansible 执行环境变量
+func (ae *AnsibleExecutor) getAnsibleEnv() []string {
+	env := os.Environ()
+
+	// 设置基本的 Ansible 环境变量以获得清洁的输出
+	env = append(env, "ANSIBLE_STDOUT_CALLBACK=default")     // 使用默认回调插件
+	env = append(env, "ANSIBLE_HOST_KEY_CHECKING=false")     // 禁用主机密钥检查
+	env = append(env, "ANSIBLE_DISPLAY_SKIPPED_HOSTS=false") // 不显示跳过的主机
+	env = append(env, "ANSIBLE_VERBOSITY=0")                 // 设置最小详细程度
+
+	return env
+}
+
 // ExtractBastionFiles 提取 bastion 相关的 Ansible 文件到临时目录
 func (ae *AnsibleExecutor) ExtractBastionFiles() error {
 	// 提取所有嵌入的文件
@@ -234,6 +247,9 @@ func (ae *AnsibleExecutor) RunBastionPlaybook() error {
 	// 设置工作目录
 	cmd.Dir = ae.workDir
 
+	// 设置环境变量（包括 Ansible 回调插件配置）
+	cmd.Env = ae.getAnsibleEnv()
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -377,6 +393,9 @@ func (ae *AnsibleExecutor) RunRegistryPlaybook() error {
 	// 设置工作目录
 	cmd.Dir = ae.workDir
 
+	// 设置环境变量（包括 Ansible 回调插件配置）
+	cmd.Env = ae.getAnsibleEnv()
+
 	// 设置输出
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -506,6 +525,9 @@ func (ae *AnsibleExecutor) RunPXEPlaybook() error {
 
 	// 设置工作目录
 	cmd.Dir = ae.workDir
+
+	// 设置环境变量（包括 Ansible 回调插件配置）
+	cmd.Env = ae.getAnsibleEnv()
 
 	// 设置输出
 	cmd.Stdout = os.Stdout

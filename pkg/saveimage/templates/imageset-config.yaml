@@ -16,10 +16,14 @@ mirror:
   # 可选: 添加 operators 同步配置
   {{- if .IncludeOperators}}
   operators:
-  - catalog: registry.redhat.io/redhat/redhat-operator-index:v{{.OCPVerMajor}}
+  - catalog: {{.OperatorCatalog}}
     packages:
     {{- range .OperatorPackages}}
-    - name: {{.}}
+    - name: {{.Name}}
+      {{- if .Channel}}
+      channels:
+      - name: {{.Channel}}
+      {{- end}}
     {{- end}}
   {{- end}}
 
@@ -29,19 +33,4 @@ mirror:
   {{- range .AdditionalImages}}
   - name: {{.}}
   {{- end}}
-  {{- end}}
-
-  # 可选: Helm charts 同步配置
-  {{- if .HelmCharts}}
-  helm:
-    repositories:
-    {{- range .HelmRepositories}}
-    - name: {{.Name}}
-      url: {{.URL}}
-      charts:
-      {{- range .Charts}}
-      - name: {{.Name}}
-        version: {{.Version}}
-      {{- end}}
-    {{- end}}
   {{- end}} 

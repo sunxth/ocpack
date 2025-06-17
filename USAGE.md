@@ -53,7 +53,12 @@ machine_network = "192.168.1.0/24"
 ### 4. 一键部署
 
 ```bash
+# 默认 ISO 模式
 ocpack all my-cluster
+
+# 指定部署模式
+ocpack all my-cluster --mode=iso    # ISO 模式
+ocpack all my-cluster --mode=pxe    # PXE 模式
 ```
 
 这个命令将自动执行以下步骤：
@@ -63,7 +68,7 @@ ocpack all my-cluster
 3. **部署 Registry 节点** - 安装和配置 Quay 镜像仓库
 4. **保存镜像到本地** - 使用 oc-mirror 下载 OpenShift 镜像
 5. **加载镜像到 Registry** - 将镜像推送到 Quay 仓库
-6. **生成安装 ISO** - 生成包含 ignition 配置的安装 ISO
+6. **生成安装介质** - 根据模式生成 ISO 文件或设置 PXE 启动环境
 
 ### 5. 部署完成
 
@@ -81,10 +86,11 @@ ocpack all my-cluster
    • 应用入口: https://192.168.1.10
    • HAProxy 统计: http://192.168.1.10:9000/stats
    • Quay 控制台: https://192.168.1.11:8443
-   • 安装 ISO: /path/to/my-cluster/installation/iso/
+   • 安装 ISO: /path/to/my-cluster/installation/iso/ (ISO 模式)
+   • PXE 服务器: http://192.168.1.10:8080/pxe (PXE 模式)
 
 🔧 下一步操作:
-   1. 使用生成的 ISO 文件启动集群节点
+   1. 使用生成的 ISO 文件启动集群节点 (ISO 模式) 或配置目标机器从 PXE 启动 (PXE 模式)
    2. 监控安装进度: ocpack mon my-cluster
    3. 获取集群凭据: ocpack mon my-cluster --credentials
    4. 使用 oc 命令行工具管理集群
@@ -116,10 +122,12 @@ ocpack deploy-registry my-cluster
 # 7. 加载镜像到 Registry
 ocpack load-image my-cluster
 
-# 8. 生成安装 ISO
-ocpack generate-iso my-cluster
+# 8. 生成安装介质
+ocpack generate-iso my-cluster     # 生成 ISO 文件
+# 或
+ocpack setup-pxe my-cluster        # 设置 PXE 启动环境
 
-# 9. 使用 ISO 启动虚拟机后，监控安装进度
+# 9. 使用 ISO 启动虚拟机或通过 PXE 启动后，监控安装进度
 ocpack mon my-cluster
 ```
 
@@ -213,6 +221,8 @@ ocpack generate-iso my-cluster --skip-verify
 - **内存**: 建议 8GB 以上
 - **Ansible**: 系统需要安装 Ansible (用于自动化部署)
 - **SSH**: 确保能够 SSH 到 Bastion 和 Registry 节点
+
+
 
 ## 支持的 OpenShift 版本
 

@@ -7,7 +7,7 @@ ocpack 是一个用于离线环境中部署 OpenShift 集群的 Go 语言命令�
 - **项目管理**: 创建和管理集群配置
 - **自动化部署**: 使用 Ansible 自动配置 Bastion 和 Registry 节点
 - **离线支持**: 下载、保存和加载 OpenShift 安装介质和镜像
-- **ISO 生成**: 生成包含 ignition 配置的安装 ISO 镜像
+- **ISO 生成**: 生成包含 ignition 配置的安装 ISO 镜
 
 ## 快速开始
 
@@ -36,8 +36,12 @@ ocpack new cluster my-cluster
 #### 一键部署（推荐）
 
 ```bash
-# 一键执行完整部署流程
+# 一键执行完整部署流程 (默认 ISO 模式)
 ocpack all my-cluster
+
+# 指定部署模式
+ocpack all my-cluster --mode=iso    # ISO 模式
+ocpack all my-cluster --mode=pxe    # PXE 模式
 ```
 
 #### 分步部署
@@ -54,10 +58,12 @@ ocpack deploy-registry my-cluster
 ocpack save-image my-cluster    # 保存镜像到本地
 ocpack load-image my-cluster    # 加载镜像到 registry
 
-# 生成安装 ISO
-ocpack generate-iso my-cluster
+# 生成安装介质
+ocpack generate-iso my-cluster     # 生成 ISO 文件
+# 或
+ocpack setup-pxe my-cluster        # 设置 PXE 启动环境
 
-# 使用 ISO 启动虚拟机后，监控安装进度
+# 使用 ISO 启动虚拟机或通过 PXE 启动后，监控安装进度
 ocpack mon my-cluster
 ```
 
@@ -100,13 +106,14 @@ machine_network = "192.168.1.0/24"
 | 命令 | 说明 |
 |------|------|
 | `new cluster <name>` | 创建新的集群项目 |
-| `all <name>` | **一键执行完整部署流程** |
+| `all <name> [--mode=iso\|pxe]` | **一键执行完整部署流程** |
 | `download <name>` | 下载 OpenShift 安装工具 |
 | `deploy-bastion <name>` | 部署 Bastion 节点 (DNS + HAProxy) |
 | `deploy-registry <name>` | 部署 Registry 节点 |
 | `save-image <name>` | 保存 OpenShift 镜像到本地 |
 | `load-image <name>` | 加载镜像到 Registry |
 | `generate-iso <name>` | 生成安装 ISO 镜像 |
+| `setup-pxe <name>` | 设置 PXE 启动环境 |
 | `mon <name>` | **监控集群安装进度** |
 
 ## 镜像管理
@@ -131,6 +138,8 @@ ocpack load-image my-cluster
 - **OpenShift 版本**: 4.14.0+ (支持 oc-mirror)
 - **Pull Secret**: 从 [Red Hat Console](https://console.redhat.com/openshift/install/pull-secret) 获取
 - **网络环境**: 确保 Bastion 和 Registry 节点可以通过 SSH 访问
+
+
 
 ## 部署架构
 

@@ -31,7 +31,7 @@ var rootCmd = &cobra.Command{
   快速开始 (一键部署):
      1. ocpack new cluster [集群名称]
      2. 编辑 [集群名称]/config.toml 和 pull-secret.txt
-     3. ocpack all [集群名称]
+     3. ocpack all [集群名称] [--mode=iso|pxe]
 
   分步部署:
      1. ocpack new cluster [集群名称]
@@ -41,7 +41,7 @@ var rootCmd = &cobra.Command{
      5. ocpack deploy-bastion [集群名称]
      6. ocpack deploy-registry [集群名称]
      7. ocpack load-image [集群名称]
-     8. ocpack generate-iso [集群名称]`,
+     8. ocpack generate-iso [集群名称] 或 ocpack setup-pxe [集群名称]`,
 	// 禁用自动生成的completion命令
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,

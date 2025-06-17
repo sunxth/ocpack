@@ -1,8 +1,11 @@
 package pxe
 
 import (
+	"bytes"
 	"embed"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,12 +14,37 @@ import (
 
 	"ocpack/pkg/config"
 	"ocpack/pkg/utils"
+
+	"github.com/mattn/go-runewidth"
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed templates/*
 var templates embed.FS
 
-// PXEGenerator PXE 生成器
+// --- Constants for filenames, directories, and commands ---
+const (
+	configDirName           = "config"
+	filesDirName            = "files"
+	tempDirName             = "temp"
+	pxeDirName              = "pxe"
+	installConfigFilename   = "install-config.yaml"
+	agentConfigFilename     = "agent-config.yaml"
+	icspFilename            = "imageContentSourcePolicy.yaml"
+	pullSecretFilename      = "pull-secret.txt"
+	mergedAuthFilename      = "merged-auth.json"
+	registryDirName         = "registry"
+	ocMirrorWorkspaceDir    = "oc-mirror-workspace"
+	imagesDirName           = "images"
+	openshiftInstallCmd     = "openshift-install"
+	defaultInterface        = "ens3"
+	uploadScriptPath        = "/usr/local/bin/upload-pxe-files.sh"
+	defaultPxeWebServerPort = 8080
+)
+
+// --- Struct Definitions ---
+
+// PXEGenerator holds the configuration and paths for generating PXE assets.
 type PXEGenerator struct {
 	Config      *config.ClusterConfig
 	ClusterName string
@@ -25,13 +53,13 @@ type PXEGenerator struct {
 	DownloadDir string
 }
 
-// GenerateOptions PXE 生成选项
+// GenerateOptions defines options for the PXE generation process.
 type GenerateOptions struct {
 	AssetServerURL string
 	SkipVerify     bool
 }
 
-// AgentConfigDataPXE PXE 版本的 agent-config.yaml 模板数据
+// AgentConfigDataPXE is the template data for agent-config.yaml.
 type AgentConfigDataPXE struct {
 	ClusterName          string
 	RendezvousIP         string
@@ -43,7 +71,7 @@ type AgentConfigDataPXE struct {
 	BootArtifactsBaseURL string
 }
 
-// HostConfig 主机配置
+// HostConfig represents a single host's configuration.
 type HostConfig struct {
 	Hostname   string
 	Role       string
@@ -52,14 +80,16 @@ type HostConfig struct {
 	Interface  string
 }
 
-// NewPXEGenerator 创建新的 PXE 生成器
+// --- Main Logic ---
+
+// NewPXEGenerator creates a new PXE generator instance.
 func NewPXEGenerator(clusterName, projectRoot string) (*PXEGenerator, error) {
 	clusterDir := filepath.Join(projectRoot, clusterName)
 	configPath := filepath.Join(clusterDir, "config.toml")
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("加载配置文件失败: %v", err)
+		return nil, fmt.Errorf("加载配置文件失败: %w", err)
 	}
 
 	return &PXEGenerator{
@@ -71,179 +101,224 @@ func NewPXEGenerator(clusterName, projectRoot string) (*PXEGenerator, error) {
 	}, nil
 }
 
-// GeneratePXE 生成 PXE 文件
+// GeneratePXE orchestrates the entire PXE file generation process.
 func (g *PXEGenerator) GeneratePXE(options *GenerateOptions) error {
-	fmt.Printf("开始为集群 %s 生成 PXE 文件\n", g.ClusterName)
+	g.printHeader("PXE 文件生成", g.ClusterName)
+	steps := 6
 
-	// 1. 验证配置和依赖
+	// 1. Validate configuration and dependencies
+	g.printStep(1, steps, "验证配置和依赖")
 	if err := g.ValidateConfig(); err != nil {
-		return fmt.Errorf("配置验证失败: %v", err)
+		g.printError("配置验证失败", err)
+		return err
 	}
+	g.printSuccess("配置验证通过")
 
-	// 2. 创建 PXE 目录结构
-	pxeDir := filepath.Join(g.ClusterDir, "pxe")
+	// 2. Create PXE directory structure
+	g.printStep(2, steps, "创建目录结构")
+	pxeDir := filepath.Join(g.ClusterDir, pxeDirName)
 	if err := g.createPXEDirs(pxeDir); err != nil {
-		return fmt.Errorf("创建 PXE 目录失败: %v", err)
+		g.printError("创建目录失败", err)
+		return err
 	}
+	g.printSuccess("目录结构已创建")
 
-	// 3. 生成 install-config.yaml（复制或重新生成）
+	// 3. Generate install-config.yaml
+	g.printStep(3, steps, "生成 install-config.yaml")
 	if err := g.generateInstallConfig(pxeDir); err != nil {
-		return fmt.Errorf("生成 install-config.yaml 失败: %v", err)
+		g.printError("生成 install-config.yaml 失败", err)
+		return err
+	}
+	g.printSuccess("install-config.yaml 已生成")
+
+	// 4. Generate agent-config.yaml
+	g.printStep(4, steps, "生成 agent-config.yaml")
+	if err := g.generateAgentConfig(pxeDir, options.AssetServerURL); err != nil {
+		g.printError("生成 agent-config.yaml 失败", err)
+		return err
+	}
+	g.printSuccess("agent-config.yaml 已生成")
+
+	// 5. Generate PXE boot files using openshift-install
+	g.printStep(5, steps, "生成 PXE 启动文件")
+	if err := g.generatePXEFiles(pxeDir, options.AssetServerURL); err != nil {
+		g.printError("生成 PXE 文件失败", err)
+		return err
 	}
 
-	// 4. 生成 agent-config.yaml（包含 bootArtifactsBaseURL）
-	if err := g.generateAgentConfigPXE(pxeDir, options.AssetServerURL); err != nil {
-		return fmt.Errorf("生成 agent-config.yaml 失败: %v", err)
-	}
-
-	// 5. 生成 PXE 文件
-	if err := g.generatePXEFiles(pxeDir, options); err != nil {
-		return fmt.Errorf("生成 PXE 文件失败: %v", err)
-	}
-
-	// 6. 自动上传 PXE 文件到服务器
+	// 6. Upload files to PXE server
+	g.printStep(6, steps, "上传文件到 PXE 服务器")
 	if err := g.uploadPXEFiles(pxeDir); err != nil {
-		fmt.Printf("⚠️  自动上传 PXE 文件失败: %v\n", err)
-		fmt.Printf("\n📋 手动上传步骤:\n")
-		fmt.Printf("1. 上传文件到服务器:\n")
-		fmt.Printf("   ssh %s@%s 'sudo /usr/local/bin/upload-pxe-files.sh %s'\n",
-			g.Config.Bastion.Username, g.Config.Bastion.IP, filepath.Join(pxeDir, "files"))
-		fmt.Printf("2. 或者手动复制文件:\n")
-		fmt.Printf("   scp %s/* %s@%s:/tmp/\n", filepath.Join(pxeDir, "files"), g.Config.Bastion.Username, g.Config.Bastion.IP)
-		fmt.Printf("   ssh %s@%s 'sudo cp /tmp/agent.x86_64-* /var/www/html/pxe/%s/'\n",
-			g.Config.Bastion.Username, g.Config.Bastion.IP, g.ClusterName)
-		fmt.Printf("3. 验证文件是否可访问:\n")
-		fmt.Printf("   curl http://%s:8080/pxe/%s/\n", g.Config.Bastion.IP, g.ClusterName)
+		g.printWarning("自动上传失败", err)
+		g.printManualUploadInstructions(pxeDir)
 	} else {
-		fmt.Println("✅ PXE 文件已自动上传到服务器")
+		g.printSuccess("文件已自动上传到服务器")
 	}
 
-	fmt.Printf("✅ PXE 文件生成完成！文件位置: %s\n", pxeDir)
+	g.printCompletion(pxeDir)
 	return nil
 }
 
-// ValidateConfig 验证配置
+// --- Step Implementations ---
+
+// ValidateConfig checks for required configurations and tools.
 func (g *PXEGenerator) ValidateConfig() error {
-	// 验证基本配置
 	if err := config.ValidateConfig(g.Config); err != nil {
 		return err
 	}
 
-	// 验证必需的工具是否存在
-	requiredTools := []string{"openshift-install"}
-	for _, tool := range requiredTools {
-		toolPath := filepath.Join(g.DownloadDir, "bin", tool)
-		if _, err := os.Stat(toolPath); os.IsNotExist(err) {
-			return fmt.Errorf("缺少必需的工具: %s，请先运行 'ocpack download' 命令", tool)
-		}
+	// Validate required tools
+	toolPath := filepath.Join(g.DownloadDir, "bin", openshiftInstallCmd)
+	if _, err := os.Stat(toolPath); os.IsNotExist(err) {
+		return fmt.Errorf("缺少必需的工具: %s，请先运行 'ocpack download' 命令", openshiftInstallCmd)
 	}
 
-	// 验证 pull-secret 文件
-	pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
-	if _, err := os.Stat(pullSecretPath); os.IsNotExist(err) {
-		return fmt.Errorf("缺少 pull-secret.txt 文件，请先获取 Red Hat pull-secret")
+	// Validate pull-secret file
+	pullSecretPath := filepath.Join(g.ClusterDir, pullSecretFilename)
+	if _, err := os.Stat(pullSecretPath); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("缺少 %s 文件，请先获取 Red Hat pull-secret", pullSecretFilename)
 	}
 
 	return nil
 }
 
-// createPXEDirs 创建 PXE 目录结构
+// createPXEDirs creates the necessary directory structure for PXE files.
 func (g *PXEGenerator) createPXEDirs(pxeDir string) error {
 	dirs := []string{
 		pxeDir,
-		filepath.Join(pxeDir, "config"),
-		filepath.Join(pxeDir, "files"),
+		filepath.Join(pxeDir, configDirName),
+		filepath.Join(pxeDir, filesDirName),
 	}
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("创建目录 %s 失败: %v", dir, err)
+			return fmt.Errorf("创建目录 %s 失败: %w", dir, err)
 		}
 	}
-
 	return nil
 }
 
-// generateInstallConfig 生成或复制 install-config.yaml
+// generateInstallConfig generates the install-config.yaml from a template.
 func (g *PXEGenerator) generateInstallConfig(pxeDir string) error {
-	fmt.Println("生成 install-config.yaml...")
-
-	configPath := filepath.Join(pxeDir, "config", "install-config.yaml")
-
-	// 检查是否已经存在 installation/install-config.yaml
-	existingConfigPath := filepath.Join(g.ClusterDir, "installation", "install-config.yaml")
-	if _, err := os.Stat(existingConfigPath); err == nil {
-		// 如果存在，直接复制
-		fmt.Printf("📋 复制现有的 install-config.yaml: %s\n", existingConfigPath)
-		return utils.CopyFile(existingConfigPath, configPath)
-	}
-
-	// 如果不存在，重新生成（复用 ISO 生成器的逻辑）
-	fmt.Printf("📋 重新生成 install-config.yaml\n")
+	g.printInfo("从模板生成 install-config.yaml")
+	configPath := filepath.Join(pxeDir, configDirName, installConfigFilename)
 	return g.generateInstallConfigFromTemplate(configPath)
 }
 
-// generateInstallConfigFromTemplate 从模板生成 install-config.yaml
-func (g *PXEGenerator) generateInstallConfigFromTemplate(configPath string) error {
-	// 读取 pull-secret
-	var pullSecretBytes []byte
-	var err error
+// generateAgentConfig generates the agent-config.yaml from a template.
+func (g *PXEGenerator) generateAgentConfig(pxeDir, assetServerURL string) error {
+	configPath := filepath.Join(pxeDir, configDirName, agentConfigFilename)
+	return g.generateAgentConfigFromTemplate(configPath, assetServerURL)
+}
 
-	mergedAuthPath := filepath.Join(g.ClusterDir, "registry", "merged-auth.json")
-	if _, err := os.Stat(mergedAuthPath); err == nil {
-		pullSecretBytes, err = os.ReadFile(mergedAuthPath)
-		if err != nil {
-			return fmt.Errorf("读取合并认证文件失败: %v", err)
-		}
-	} else {
-		pullSecretPath := filepath.Join(g.ClusterDir, "pull-secret.txt")
-		pullSecretBytes, err = os.ReadFile(pullSecretPath)
-		if err != nil {
-			return fmt.Errorf("读取 pull-secret 失败: %v", err)
-		}
-	}
-	pullSecret := strings.TrimSpace(string(pullSecretBytes))
-
-	// 读取 SSH 公钥（如果存在）
-	sshKeyPub := ""
-	sshKeyPath := filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa.pub")
-	if sshKeyBytes, err := os.ReadFile(sshKeyPath); err == nil {
-		sshKeyPub = strings.TrimSpace(string(sshKeyBytes))
-	}
-
-	// 读取额外的信任证书（如果存在）
-	additionalTrustBundle := ""
-
-	// 尝试多个可能的证书路径
-	possibleCertPaths := []string{
-		filepath.Join(g.ClusterDir, "registry", g.Config.Registry.IP, "rootCA.pem"),
-		filepath.Join(g.ClusterDir, "registry", fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain), "rootCA.pem"),
-		filepath.Join(g.ClusterDir, "registry", "rootCA.pem"),
-	}
-
-	for _, certPath := range possibleCertPaths {
-		if caCertBytes, err := os.ReadFile(certPath); err == nil {
-			additionalTrustBundle = string(caCertBytes)
-			fmt.Printf("📋 找到证书文件: %s\n", certPath)
-			break
-		}
-	}
-
-	if additionalTrustBundle == "" {
-		fmt.Printf("⚠️  未找到证书文件，尝试的路径:\n")
-		for _, path := range possibleCertPaths {
-			fmt.Printf("   - %s\n", path)
-		}
-	}
-
-	// 查找并解析 ICSP 文件
-	imageContentSources, err := g.findAndParseICSP()
+// generatePXEFiles runs 'openshift-install' to create boot files.
+func (g *PXEGenerator) generatePXEFiles(pxeDir, assetServerURL string) error {
+	openshiftInstallPath, err := g.findOpenshiftInstall()
 	if err != nil {
-		fmt.Printf("⚠️  查找 ICSP 文件失败: %v\n", err)
-		imageContentSources = ""
+		return fmt.Errorf("查找 openshift-install 失败: %w", err)
+	}
+	g.printInfo(fmt.Sprintf("使用工具: %s", filepath.Base(openshiftInstallPath)))
+
+	tempDir := filepath.Join(pxeDir, tempDirName)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return fmt.Errorf("创建临时目录失败: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Copy configs to temp dir as openshift-install might modify them.
+	for _, filename := range []string{installConfigFilename, agentConfigFilename} {
+		src := filepath.Join(pxeDir, configDirName, filename)
+		dst := filepath.Join(tempDir, filename)
+		if err := utils.CopyFile(src, dst); err != nil {
+			return fmt.Errorf("复制 %s 失败: %w", filename, err)
+		}
 	}
 
-	// 构建模板数据
+	g.printInfo("执行 openshift-install agent create pxe-files")
+	cmd := exec.Command(openshiftInstallPath, "agent", "create", "pxe-files", "--dir", tempDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("生成 PXE 文件失败: %w", err)
+	}
+
+	filesDir := filepath.Join(pxeDir, filesDirName)
+	bootArtifactsDir := filepath.Join(tempDir, "boot-artifacts")
+
+	var fileCount int
+	// openshift-install > 4.12 creates a boot-artifacts subdirectory.
+	if _, err := os.Stat(bootArtifactsDir); err == nil {
+		fileCount, err = g.moveAndCountFiles(bootArtifactsDir, filesDir, nil)
+		if err != nil {
+			return err
+		}
+		// URLs in iPXE scripts need to be updated.
+		g.updateIPXEScript(filesDir, assetServerURL)
+	} else {
+		// Older versions place files in the root.
+		ignore := map[string]bool{installConfigFilename: true, agentConfigFilename: true}
+		fileCount, err = g.moveAndCountFiles(tempDir, filesDir, ignore)
+		if err != nil {
+			return err
+		}
+	}
+
+	g.printInfo(fmt.Sprintf("已生成 %d 个 PXE 文件", fileCount))
+	g.printSuccess("PXE 启动文件生成完成")
+	return nil
+}
+
+// uploadPXEFiles uploads the generated PXE files to the bastion server.
+func (g *PXEGenerator) uploadPXEFiles(pxeDir string) error {
+	filesDir := filepath.Join(pxeDir, filesDirName)
+	if _, err := os.Stat(filesDir); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("PXE 文件目录不存在: %s", filesDir)
+	}
+
+	uploadCmdStr := fmt.Sprintf("sudo %s %s", uploadScriptPath, filesDir)
+	sshUserHost := fmt.Sprintf("%s@%s", g.Config.Bastion.Username, g.Config.Bastion.IP)
+
+	var sshCmd *exec.Cmd
+	if g.Config.Bastion.SSHKeyPath != "" {
+		sshCmd = exec.Command("ssh", "-i", g.Config.Bastion.SSHKeyPath, "-o", "StrictHostKeyChecking=no", sshUserHost, uploadCmdStr)
+	} else {
+		sshCmd = exec.Command("sshpass", "-p", g.Config.Bastion.Password, "ssh", "-o", "StrictHostKeyChecking=no", sshUserHost, uploadCmdStr)
+	}
+
+	sshCmd.Stdout = os.Stdout
+	sshCmd.Stderr = os.Stderr
+
+	if err := sshCmd.Run(); err != nil {
+		return fmt.Errorf("执行上传脚本失败: %w", err)
+	}
+	return nil
+}
+
+// --- Template Generation and Data Gathering ---
+
+// generateInstallConfigFromTemplate fills and writes the install-config.yaml template.
+func (g *PXEGenerator) generateInstallConfigFromTemplate(configPath string) error {
+	pullSecret, err := g.getPullSecret()
+	if err != nil {
+		return err
+	}
+
+	sshKey, _ := g.getSSHKey() // SSH key is optional
+
+	trustBundle, err := g.getAdditionalTrustBundle()
+	if err != nil {
+		g.printInfo(fmt.Sprintf("未找到证书文件，将跳过: %v", err))
+	} else {
+		g.printInfo("已找到并加载 CA 证书")
+	}
+
+	icsp, err := g.findAndParseICSP()
+	if err != nil {
+		g.printInfo(fmt.Sprintf("未找到 ICSP 文件，将跳过: %v", err))
+	} else {
+		g.printInfo("已找到并解析 ICSP 文件")
+	}
+
 	data := struct {
 		BaseDomain            string
 		ClusterName           string
@@ -268,26 +343,22 @@ func (g *PXEGenerator) generateInstallConfigFromTemplate(configPath string) erro
 		NumMasters:            len(g.Config.Cluster.ControlPlane),
 		MachineNetwork:        utils.ExtractNetworkBase(g.Config.Cluster.Network.MachineNetwork),
 		PrefixLength:          utils.ExtractPrefixLength(g.Config.Cluster.Network.MachineNetwork),
-		HostPrefix:            23,
+		HostPrefix:            23, // Default host prefix
 		PullSecret:            pullSecret,
-		SSHKeyPub:             sshKeyPub,
-		AdditionalTrustBundle: additionalTrustBundle,
-		ImageContentSources:   imageContentSources,
+		SSHKeyPub:             sshKey,
+		AdditionalTrustBundle: trustBundle,
+		ImageContentSources:   icsp,
 		ArchShort:             "amd64",
-		UseProxy:              false,
+		UseProxy:              false, // Proxy settings can be added here
 	}
 
-	// 读取模板
-	tmplContent, err := templates.ReadFile("templates/install-config.yaml")
-	if err != nil {
-		return fmt.Errorf("读取 install-config 模板失败: %v", err)
-	}
-
-	// 创建模板函数映射
 	funcMap := template.FuncMap{
 		"indent": func(spaces int, text string) string {
-			lines := strings.Split(text, "\n")
+			if text == "" {
+				return ""
+			}
 			indentStr := strings.Repeat(" ", spaces)
+			lines := strings.Split(text, "\n")
 			for i, line := range lines {
 				if line != "" {
 					lines[i] = indentStr + line
@@ -297,340 +368,179 @@ func (g *PXEGenerator) generateInstallConfigFromTemplate(configPath string) erro
 		},
 	}
 
-	// 解析和执行模板
-	tmpl, err := template.New("install-config").Funcs(funcMap).Parse(string(tmplContent))
-	if err != nil {
-		return fmt.Errorf("解析 install-config 模板失败: %v", err)
-	}
-
-	file, err := os.Create(configPath)
-	if err != nil {
-		return fmt.Errorf("创建 install-config.yaml 失败: %v", err)
-	}
-	defer file.Close()
-
-	if err := tmpl.Execute(file, data); err != nil {
-		return fmt.Errorf("生成 install-config.yaml 失败: %v", err)
-	}
-
-	fmt.Printf("✅ install-config.yaml 已生成: %s\n", configPath)
-	return nil
+	return g.executeTemplate("templates/install-config.yaml", configPath, data, funcMap)
 }
 
-// generateAgentConfigPXE 生成包含 bootArtifactsBaseURL 的 agent-config.yaml
-func (g *PXEGenerator) generateAgentConfigPXE(pxeDir, assetServerURL string) error {
-	fmt.Println("生成 agent-config.yaml (PXE 版本)...")
-
-	// 构建主机配置
+// generateAgentConfigFromTemplate fills and writes the agent-config.yaml template.
+func (g *PXEGenerator) generateAgentConfigFromTemplate(configPath, assetServerURL string) error {
 	var hosts []HostConfig
-
-	// 添加 Control Plane 节点
-	for i, cp := range g.Config.Cluster.ControlPlane {
-		hostname := cp.Name
-		if len(g.Config.Cluster.Worker) == 0 && len(g.Config.Cluster.ControlPlane) == 1 {
-			hostname = g.Config.ClusterInfo.Name
-		}
-
+	for _, cp := range g.Config.Cluster.ControlPlane {
 		hosts = append(hosts, HostConfig{
-			Hostname:   hostname,
+			Hostname:   cp.Name,
 			Role:       "master",
 			MACAddress: cp.MAC,
 			IPAddress:  cp.IP,
-			Interface:  "ens3", // 默认网络接口名
+			Interface:  defaultInterface,
 		})
-
-		// 第一个 master 节点作为 rendezvous IP
-		if i == 0 {
-			// rendezvousIP 将在模板数据中设置
-		}
 	}
-
-	// 添加 Worker 节点
 	for _, worker := range g.Config.Cluster.Worker {
 		hosts = append(hosts, HostConfig{
 			Hostname:   worker.Name,
 			Role:       "worker",
 			MACAddress: worker.MAC,
 			IPAddress:  worker.IP,
-			Interface:  "ens3",
+			Interface:  defaultInterface,
 		})
 	}
 
-	// 如果没有提供 assetServerURL，使用 Bastion 节点的 IP（端口8080避免与HAProxy冲突）
 	if assetServerURL == "" {
-		assetServerURL = fmt.Sprintf("http://%s:8080/pxe", g.Config.Bastion.IP)
+		assetServerURL = fmt.Sprintf("http://%s:%d/%s", g.Config.Bastion.IP, defaultPxeWebServerPort, pxeDirName)
 	}
 
-	// 构建模板数据
 	data := AgentConfigDataPXE{
 		ClusterName:          g.Config.ClusterInfo.Name,
-		RendezvousIP:         g.Config.Cluster.ControlPlane[0].IP, // 使用第一个 master 节点的 IP
+		RendezvousIP:         g.Config.Cluster.ControlPlane[0].IP,
 		Hosts:                hosts,
-		Port0:                "ens3",
+		Port0:                defaultInterface,
 		PrefixLength:         utils.ExtractPrefixLength(g.Config.Cluster.Network.MachineNetwork),
 		NextHopAddress:       utils.ExtractGateway(g.Config.Cluster.Network.MachineNetwork),
 		DNSServers:           []string{g.Config.Bastion.IP},
 		BootArtifactsBaseURL: assetServerURL,
 	}
 
-	// 读取模板
-	tmplContent, err := templates.ReadFile("templates/agent-config-pxe.yaml")
-	if err != nil {
-		return fmt.Errorf("读取 agent-config-pxe 模板失败: %v", err)
+	err := g.executeTemplate("templates/agent-config-pxe.yaml", configPath, data, nil)
+	if err == nil {
+		g.printInfo(fmt.Sprintf("bootArtifactsBaseURL: %s", assetServerURL))
 	}
-
-	// 解析和执行模板
-	tmpl, err := template.New("agent-config-pxe").Parse(string(tmplContent))
-	if err != nil {
-		return fmt.Errorf("解析 agent-config-pxe 模板失败: %v", err)
-	}
-
-	configPath := filepath.Join(pxeDir, "config", "agent-config.yaml")
-	file, err := os.Create(configPath)
-	if err != nil {
-		return fmt.Errorf("创建 agent-config.yaml 失败: %v", err)
-	}
-	defer file.Close()
-
-	if err := tmpl.Execute(file, data); err != nil {
-		return fmt.Errorf("生成 agent-config.yaml 失败: %v", err)
-	}
-
-	fmt.Printf("✅ agent-config.yaml (PXE 版本) 已生成: %s\n", configPath)
-	fmt.Printf("📋 bootArtifactsBaseURL: %s\n", assetServerURL)
-	return nil
+	return err
 }
 
-// generatePXEFiles 生成 PXE 文件
-func (g *PXEGenerator) generatePXEFiles(pxeDir string, options *GenerateOptions) error {
-	fmt.Println("生成 PXE 文件...")
-
-	// 1. 查找 openshift-install 工具
-	openshiftInstallPath, err := g.findOpenshiftInstall()
-	if err != nil {
-		return fmt.Errorf("查找 openshift-install 失败: %v", err)
-	}
-
-	// 2. 复制配置文件到临时目录（openshift-install 会修改这些文件）
-	tempDir := filepath.Join(pxeDir, "temp")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return fmt.Errorf("创建临时目录失败: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// 复制配置文件
-	if err := utils.CopyFile(
-		filepath.Join(pxeDir, "config", "install-config.yaml"),
-		filepath.Join(tempDir, "install-config.yaml"),
-	); err != nil {
-		return fmt.Errorf("复制 install-config.yaml 失败: %v", err)
-	}
-
-	if err := utils.CopyFile(
-		filepath.Join(pxeDir, "config", "agent-config.yaml"),
-		filepath.Join(tempDir, "agent-config.yaml"),
-	); err != nil {
-		return fmt.Errorf("复制 agent-config.yaml 失败: %v", err)
-	}
-
-	// 3. 生成 PXE 文件
-	cmd := exec.Command(openshiftInstallPath, "agent", "create", "pxe-files", "--dir", tempDir)
-	cmd.Dir = tempDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	fmt.Printf("执行命令: %s agent create pxe-files --dir %s\n", openshiftInstallPath, tempDir)
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("生成 PXE 文件失败: %v", err)
-	}
-
-	// 4. 移动生成的 PXE 文件到目标目录
-	filesDir := filepath.Join(pxeDir, "files")
-
-	// 检查是否有 boot-artifacts 目录
-	bootArtifactsDir := filepath.Join(tempDir, "boot-artifacts")
-	if _, err := os.Stat(bootArtifactsDir); err == nil {
-		// 如果存在 boot-artifacts 目录，从中复制文件
-		fmt.Println("发现 boot-artifacts 目录，复制 PXE 文件...")
-		bootFiles, err := os.ReadDir(bootArtifactsDir)
+// getPullSecret reads the pull secret from either merged-auth.json or pull-secret.txt.
+func (g *PXEGenerator) getPullSecret() (string, error) {
+	mergedAuthPath := filepath.Join(g.ClusterDir, registryDirName, mergedAuthFilename)
+	if _, err := os.Stat(mergedAuthPath); err == nil {
+		g.printInfo("使用合并后的认证文件 " + mergedAuthFilename)
+		secretBytes, err := os.ReadFile(mergedAuthPath)
 		if err != nil {
-			return fmt.Errorf("读取 boot-artifacts 目录失败: %v", err)
+			return "", fmt.Errorf("读取合并认证文件失败: %w", err)
 		}
-
-		for _, file := range bootFiles {
-			if file.IsDir() {
-				continue
-			}
-
-			srcPath := filepath.Join(bootArtifactsDir, file.Name())
-			dstPath := filepath.Join(filesDir, file.Name())
-
-			if err := utils.CopyFile(srcPath, dstPath); err != nil {
-				fmt.Printf("⚠️  复制文件 %s 失败: %v\n", file.Name(), err)
-			} else {
-				fmt.Printf("✅ 已生成 PXE 文件: %s\n", file.Name())
-			}
-		}
-
-		// 处理 iPXE 脚本，更新其中的 URL
-		if err := g.updateIPXEScript(filesDir, options.AssetServerURL); err != nil {
-			fmt.Printf("⚠️  更新 iPXE 脚本失败: %v\n", err)
-		}
-	} else {
-		// 如果没有 boot-artifacts 目录，查找临时目录中的文件
-		fmt.Println("未发现 boot-artifacts 目录，查找临时目录中的文件...")
-		tempFiles, err := os.ReadDir(tempDir)
-		if err != nil {
-			return fmt.Errorf("读取临时目录失败: %v", err)
-		}
-
-		for _, file := range tempFiles {
-			if file.IsDir() {
-				continue
-			}
-
-			// 跳过配置文件
-			if file.Name() == "install-config.yaml" || file.Name() == "agent-config.yaml" {
-				continue
-			}
-
-			srcPath := filepath.Join(tempDir, file.Name())
-			dstPath := filepath.Join(filesDir, file.Name())
-
-			if err := utils.MoveFile(srcPath, dstPath); err != nil {
-				fmt.Printf("⚠️  移动文件 %s 失败: %v\n", file.Name(), err)
-			} else {
-				fmt.Printf("✅ 已生成 PXE 文件: %s\n", file.Name())
-			}
-		}
+		return strings.TrimSpace(string(secretBytes)), nil
 	}
 
-	fmt.Printf("✅ PXE 文件已生成到: %s\n", filesDir)
-	return nil
-}
-
-// updateIPXEScript 更新 iPXE 脚本中的 URL
-func (g *PXEGenerator) updateIPXEScript(filesDir, assetServerURL string) error {
-	// 查找 iPXE 脚本文件
-	ipxeFiles, err := filepath.Glob(filepath.Join(filesDir, "*.ipxe"))
+	pullSecretPath := filepath.Join(g.ClusterDir, pullSecretFilename)
+	g.printInfo("使用 " + pullSecretFilename)
+	secretBytes, err := os.ReadFile(pullSecretPath)
 	if err != nil {
-		return fmt.Errorf("查找 iPXE 文件失败: %v", err)
+		return "", fmt.Errorf("读取 pull-secret 失败: %w", err)
 	}
-
-	if len(ipxeFiles) == 0 {
-		fmt.Println("未找到 iPXE 脚本文件")
-		return nil
-	}
-
-	for _, ipxeFile := range ipxeFiles {
-		fmt.Printf("更新 iPXE 脚本: %s\n", filepath.Base(ipxeFile))
-
-		// 读取原始内容
-		content, err := os.ReadFile(ipxeFile)
-		if err != nil {
-			return fmt.Errorf("读取 iPXE 文件失败: %v", err)
-		}
-
-		// 如果没有指定 assetServerURL，使用默认值
-		if assetServerURL == "" {
-			assetServerURL = fmt.Sprintf("http://%s:8080/pxe/%s", g.Config.Bastion.IP, g.ClusterName)
-		}
-
-		// 更新内容中的 URL
-		updatedContent := string(content)
-
-		// 替换 iPXE 脚本中的文件路径为带集群名称的路径
-		updatedContent = strings.ReplaceAll(updatedContent,
-			fmt.Sprintf("http://%s:8080/pxe/agent.x86_64-initrd.img", g.Config.Bastion.IP),
-			fmt.Sprintf("%s/agent.x86_64-initrd.img", assetServerURL))
-
-		updatedContent = strings.ReplaceAll(updatedContent,
-			fmt.Sprintf("http://%s:8080/pxe/agent.x86_64-vmlinuz", g.Config.Bastion.IP),
-			fmt.Sprintf("%s/agent.x86_64-vmlinuz", assetServerURL))
-
-		updatedContent = strings.ReplaceAll(updatedContent,
-			fmt.Sprintf("http://%s:8080/pxe/agent.x86_64-rootfs.img", g.Config.Bastion.IP),
-			fmt.Sprintf("%s/agent.x86_64-rootfs.img", assetServerURL))
-
-		// 写回文件
-		if err := os.WriteFile(ipxeFile, []byte(updatedContent), 0644); err != nil {
-			return fmt.Errorf("写入 iPXE 文件失败: %v", err)
-		}
-
-		fmt.Printf("✅ iPXE 脚本已更新: %s\n", filepath.Base(ipxeFile))
-	}
-
-	return nil
+	return strings.TrimSpace(string(secretBytes)), nil
 }
 
-// findOpenshiftInstall 查找 openshift-install 工具
-func (g *PXEGenerator) findOpenshiftInstall() (string, error) {
-	// 1. 首先检查是否有从 registry 提取的版本
-	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
-	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("openshift-install-%s-%s",
-		g.Config.ClusterInfo.OpenShiftVersion, registryHost))
-
-	if _, err := os.Stat(extractedBinary); err == nil {
-		fmt.Printf("✅ 使用从 registry 提取的 openshift-install: %s\n", extractedBinary)
-		return extractedBinary, nil
+// getSSHKey reads the user's public SSH key.
+func (g *PXEGenerator) getSSHKey() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("无法获取用户主目录: %w", err)
 	}
-
-	// 2. 查找当前目录中以 openshift-install 开头的文件
-	files, err := filepath.Glob(filepath.Join(g.ClusterDir, "openshift-install*"))
-	if err == nil && len(files) > 0 {
-		fmt.Printf("✅ 使用集群目录中的 openshift-install: %s\n", files[0])
-		return files[0], nil
+	sshKeyPath := filepath.Join(home, ".ssh", "id_rsa.pub")
+	sshKeyBytes, err := os.ReadFile(sshKeyPath)
+	if err != nil {
+		return "", fmt.Errorf("读取 SSH 公钥失败 (%s): %w", sshKeyPath, err)
 	}
-
-	// 3. 使用下载的版本
-	downloadedBinary := filepath.Join(g.DownloadDir, "bin", "openshift-install")
-	if _, err := os.Stat(downloadedBinary); err == nil {
-		fmt.Printf("✅ 使用下载的 openshift-install: %s\n", downloadedBinary)
-		return downloadedBinary, nil
-	}
-
-	return "", fmt.Errorf("未找到 openshift-install 工具")
+	return strings.TrimSpace(string(sshKeyBytes)), nil
 }
 
-// findAndParseICSP 查找并解析 ICSP 文件（复用 ISO 生成器的逻辑）
+// getAdditionalTrustBundle finds and reads the custom CA certificate.
+func (g *PXEGenerator) getAdditionalTrustBundle() (string, error) {
+	possibleCertPaths := []string{
+		filepath.Join(g.ClusterDir, registryDirName, g.Config.Registry.IP, "rootCA.pem"),
+		filepath.Join(g.ClusterDir, registryDirName, fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain), "rootCA.pem"),
+		filepath.Join(g.ClusterDir, registryDirName, "rootCA.pem"),
+	}
+
+	for _, certPath := range possibleCertPaths {
+		if caCertBytes, err := os.ReadFile(certPath); err == nil {
+			return string(caCertBytes), nil
+		}
+	}
+	return "", errors.New("未在任何预期位置找到 rootCA.pem")
+}
+
+// --- ICSP Parsing (Robust Version) ---
+
+// ICSP represents the structure of an ImageContentSourcePolicy YAML file.
+type ICSP struct {
+	Spec struct {
+		RepositoryDigestMirrors []struct {
+			Source  string   `yaml:"source"`
+			Mirrors []string `yaml:"mirrors"`
+		} `yaml:"repositoryDigestMirrors"`
+	} `yaml:"spec"`
+}
+
+// findAndParseICSP finds the latest ICSP file and parses it robustly using a YAML library.
 func (g *PXEGenerator) findAndParseICSP() (string, error) {
-	// 查找 oc-mirror workspace 目录
-	workspaceDir := filepath.Join(g.ClusterDir, "oc-mirror-workspace")
-	if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
-		workspaceDir = filepath.Join(g.ClusterDir, "images", "oc-mirror-workspace")
-		if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
-			return "", fmt.Errorf("oc-mirror workspace 目录不存在")
-		}
+	workspaceDir, err := g.findOcMirrorWorkspace()
+	if err != nil {
+		return "", err
 	}
 
-	// 查找最新的 results 目录
 	latestResultsDir, err := g.findLatestResultsDir(workspaceDir)
 	if err != nil {
-		return "", fmt.Errorf("查找最新 results 目录失败: %v", err)
+		return "", fmt.Errorf("查找最新 results 目录失败: %w", err)
 	}
 
-	// 查找 imageContentSourcePolicy.yaml 文件
-	icspFile := filepath.Join(latestResultsDir, "imageContentSourcePolicy.yaml")
-	if _, err := os.Stat(icspFile); os.IsNotExist(err) {
-		return "", fmt.Errorf("ICSP 文件不存在: %s", icspFile)
-	}
-
-	// 读取并解析 ICSP 文件
+	icspFile := filepath.Join(latestResultsDir, icspFilename)
 	icspContent, err := os.ReadFile(icspFile)
 	if err != nil {
-		return "", fmt.Errorf("读取 ICSP 文件失败: %v", err)
+		return "", fmt.Errorf("读取 ICSP 文件 %s 失败: %w", icspFile, err)
 	}
 
-	// 解析 ICSP 内容并转换为 install-config.yaml 格式
-	return g.parseICSPToInstallConfig(string(icspContent))
+	decoder := yaml.NewDecoder(bytes.NewReader(icspContent))
+	var resultBuilder strings.Builder
+
+	for {
+		var icspDoc ICSP
+		if err := decoder.Decode(&icspDoc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("解析 ICSP YAML 文档失败: %w", err)
+		}
+
+		for _, rdm := range icspDoc.Spec.RepositoryDigestMirrors {
+			// Using a simple template for consistent formatting.
+			mirrorBlock := fmt.Sprintf("- mirrors:\n  - %s\n  source: %s", strings.Join(rdm.Mirrors, "\n  - "), rdm.Source)
+			resultBuilder.WriteString(mirrorBlock)
+			resultBuilder.WriteString("\n")
+		}
+	}
+
+	if resultBuilder.Len() == 0 {
+		return "", errors.New("ICSP 文件中未找到有效的镜像源配置")
+	}
+	return strings.TrimSpace(resultBuilder.String()), nil
 }
 
-// findLatestResultsDir 查找最新的 results 目录
+// findOcMirrorWorkspace locates the oc-mirror workspace directory.
+func (g *PXEGenerator) findOcMirrorWorkspace() (string, error) {
+	dirsToCheck := []string{
+		filepath.Join(g.ClusterDir, ocMirrorWorkspaceDir),
+		filepath.Join(g.ClusterDir, imagesDirName, ocMirrorWorkspaceDir),
+	}
+	for _, dir := range dirsToCheck {
+		if _, err := os.Stat(dir); err == nil {
+			return dir, nil
+		}
+	}
+	return "", errors.New("oc-mirror workspace 目录不存在")
+}
+
+// findLatestResultsDir finds the most recent non-empty 'results-*' directory.
 func (g *PXEGenerator) findLatestResultsDir(workspaceDir string) (string, error) {
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
-		return "", fmt.Errorf("读取 workspace 目录失败: %v", err)
+		return "", fmt.Errorf("读取 workspace 目录失败: %w", err)
 	}
 
 	var latestDir string
@@ -640,15 +550,13 @@ func (g *PXEGenerator) findLatestResultsDir(workspaceDir string) (string, error)
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "results-") {
 			continue
 		}
-
 		dirPath := filepath.Join(workspaceDir, entry.Name())
-		if !g.isDirNonEmpty(dirPath) {
-			continue
+		if entries, _ := os.ReadDir(dirPath); len(entries) == 0 {
+			continue // Skip empty dirs
 		}
 
-		// 从目录名提取时间戳
-		timestamp := strings.TrimPrefix(entry.Name(), "results-")
-		if timeValue, err := utils.ParseTimestamp(timestamp); err == nil {
+		timestampStr := strings.TrimPrefix(entry.Name(), "results-")
+		if timeValue, err := utils.ParseTimestamp(timestampStr); err == nil {
 			if timeValue > latestTime {
 				latestTime = timeValue
 				latestDir = dirPath
@@ -657,159 +565,174 @@ func (g *PXEGenerator) findLatestResultsDir(workspaceDir string) (string, error)
 	}
 
 	if latestDir == "" {
-		return "", fmt.Errorf("未找到有效的 results 目录")
+		return "", errors.New("未找到有效的 results 目录")
 	}
-
 	return latestDir, nil
 }
 
-// isDirNonEmpty 检查目录是否非空
-func (g *PXEGenerator) isDirNonEmpty(dirPath string) bool {
-	entries, err := os.ReadDir(dirPath)
+// --- Utility and Helper Functions ---
+
+// executeTemplate parses a template, executes it with data, and writes to a file.
+func (g *PXEGenerator) executeTemplate(templatePath, outputPath string, data interface{}, funcMap template.FuncMap) error {
+	tmplContent, err := templates.ReadFile(templatePath)
 	if err != nil {
-		return false
-	}
-	return len(entries) > 0
-}
-
-// parseICSPToInstallConfig 将 ICSP 内容转换为 install-config.yaml 格式
-func (g *PXEGenerator) parseICSPToInstallConfig(icspContent string) (string, error) {
-	// 解析 YAML 文档
-	documents := strings.Split(icspContent, "---")
-	var allMirrors []string
-
-	for _, doc := range documents {
-		doc = strings.TrimSpace(doc)
-		if doc == "" {
-			continue
-		}
-
-		// 提取 repositoryDigestMirrors 部分
-		mirrors := g.extractRepositoryDigestMirrors(doc)
-		allMirrors = append(allMirrors, mirrors...)
+		return fmt.Errorf("读取模板 %s 失败: %w", templatePath, err)
 	}
 
-	if len(allMirrors) == 0 {
-		return "", fmt.Errorf("未找到有效的镜像源配置")
+	tmpl := template.New(filepath.Base(templatePath))
+	if funcMap != nil {
+		tmpl = tmpl.Funcs(funcMap)
 	}
 
-	// 构建 install-config.yaml 格式的 imageContentSources
-	var result strings.Builder
-	for _, mirror := range allMirrors {
-		result.WriteString(mirror)
-		result.WriteString("\n")
+	tmpl, err = tmpl.Parse(string(tmplContent))
+	if err != nil {
+		return fmt.Errorf("解析模板 %s 失败: %w", templatePath, err)
 	}
 
-	return strings.TrimSpace(result.String()), nil
-}
-
-// extractRepositoryDigestMirrors 从 ICSP 文档中提取镜像源配置
-func (g *PXEGenerator) extractRepositoryDigestMirrors(doc string) []string {
-	var mirrors []string
-	lines := strings.Split(doc, "\n")
-
-	inRepositoryDigestMirrors := false
-	inMirrorBlock := false
-	currentMirror := ""
-	currentSource := ""
-
-	for _, line := range lines {
-		trimmedLine := strings.TrimSpace(line)
-
-		if strings.Contains(line, "repositoryDigestMirrors:") {
-			inRepositoryDigestMirrors = true
-			continue
-		}
-
-		if !inRepositoryDigestMirrors {
-			continue
-		}
-
-		// 检查是否到了下一个顶级字段
-		if trimmedLine != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-
-		if strings.Contains(line, "- mirrors:") {
-			// 保存之前的镜像配置
-			if currentMirror != "" && currentSource != "" {
-				mirrors = append(mirrors, g.formatMirrorConfig(currentMirror, currentSource))
-			}
-			inMirrorBlock = true
-			currentMirror = ""
-			currentSource = ""
-			continue
-		}
-
-		if inMirrorBlock {
-			if strings.Contains(line, "- ") && !strings.Contains(line, "mirrors:") {
-				// 这是一个镜像地址
-				mirror := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "- "))
-				if currentMirror == "" {
-					currentMirror = mirror
-				}
-			} else if strings.Contains(line, "source:") {
-				// 这是源地址
-				source := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "source:"))
-				currentSource = source
-			}
-		}
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("创建文件 %s 失败: %w", outputPath, err)
 	}
+	defer file.Close()
 
-	// 保存最后一个镜像配置
-	if currentMirror != "" && currentSource != "" {
-		mirrors = append(mirrors, g.formatMirrorConfig(currentMirror, currentSource))
+	if err := tmpl.Execute(file, data); err != nil {
+		return fmt.Errorf("生成文件 %s 失败: %w", outputPath, err)
 	}
-
-	return mirrors
-}
-
-// formatMirrorConfig 格式化镜像配置为 install-config.yaml 格式
-func (g *PXEGenerator) formatMirrorConfig(mirror, source string) string {
-	return fmt.Sprintf("- mirrors:\n  - %s\n  source: %s", mirror, source)
-}
-
-// uploadPXEFiles 自动上传 PXE 文件到服务器
-func (g *PXEGenerator) uploadPXEFiles(pxeDir string) error {
-	fmt.Println("📤 自动上传 PXE 文件到服务器...")
-
-	filesDir := filepath.Join(pxeDir, "files")
-
-	// 检查文件目录是否存在
-	if _, err := os.Stat(filesDir); os.IsNotExist(err) {
-		return fmt.Errorf("PXE 文件目录不存在: %s", filesDir)
-	}
-
-	// 构建上传命令
-	uploadCmd := fmt.Sprintf("sudo /usr/local/bin/upload-pxe-files.sh %s", filesDir)
-
-	// 使用 SSH 执行上传脚本
-	var sshCmd *exec.Cmd
-	if g.Config.Bastion.SSHKeyPath != "" {
-		// 使用 SSH 密钥
-		sshCmd = exec.Command("ssh",
-			"-i", g.Config.Bastion.SSHKeyPath,
-			"-o", "StrictHostKeyChecking=no",
-			fmt.Sprintf("%s@%s", g.Config.Bastion.Username, g.Config.Bastion.IP),
-			uploadCmd)
-	} else {
-		// 使用 sshpass 和密码
-		sshCmd = exec.Command("sshpass", "-p", g.Config.Bastion.Password, "ssh",
-			"-o", "StrictHostKeyChecking=no",
-			fmt.Sprintf("%s@%s", g.Config.Bastion.Username, g.Config.Bastion.IP),
-			uploadCmd)
-	}
-
-	// 设置输出
-	sshCmd.Stdout = os.Stdout
-	sshCmd.Stderr = os.Stderr
-
-	fmt.Printf("执行上传命令: %s\n", uploadCmd)
-
-	if err := sshCmd.Run(); err != nil {
-		return fmt.Errorf("执行上传脚本失败: %v", err)
-	}
-
-	fmt.Println("✅ PXE 文件已自动上传到服务器")
 	return nil
+}
+
+// updateIPXEScript replaces hardcoded URLs in iPXE scripts with the correct asset server URL.
+func (g *PXEGenerator) updateIPXEScript(filesDir, assetServerURL string) error {
+	ipxeFiles, err := filepath.Glob(filepath.Join(filesDir, "*.ipxe"))
+	if err != nil || len(ipxeFiles) == 0 {
+		return err // No files found is not an error here
+	}
+
+	if assetServerURL == "" {
+		assetServerURL = fmt.Sprintf("http://%s:%d/%s", g.Config.Bastion.IP, defaultPxeWebServerPort, g.ClusterName)
+	}
+
+	// This is the default URL structure generated by openshift-install
+	oldBaseURL := fmt.Sprintf("http://%s:8080/pxe", g.Config.Bastion.IP)
+
+	for _, ipxeFile := range ipxeFiles {
+		content, err := os.ReadFile(ipxeFile)
+		if err != nil {
+			g.printWarning(fmt.Sprintf("读取 iPXE 文件 %s 失败", ipxeFile), err)
+			continue
+		}
+		// Replace the base URL prefix for all assets
+		updatedContent := strings.ReplaceAll(string(content), oldBaseURL, assetServerURL)
+
+		if err := os.WriteFile(ipxeFile, []byte(updatedContent), 0644); err != nil {
+			return fmt.Errorf("更新 iPXE 文件 %s 失败: %w", ipxeFile, err)
+		}
+	}
+	return nil
+}
+
+// findOpenshiftInstall locates the openshift-install binary.
+func (g *PXEGenerator) findOpenshiftInstall() (string, error) {
+	// Prioritize the version extracted from the local registry
+	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("%s-%s-%s", openshiftInstallCmd, g.Config.ClusterInfo.OpenShiftVersion, registryHost))
+	if _, err := os.Stat(extractedBinary); err == nil {
+		return extractedBinary, nil
+	}
+
+	// Fallback to the one in the download directory
+	downloadedBinary := filepath.Join(g.DownloadDir, "bin", openshiftInstallCmd)
+	if _, err := os.Stat(downloadedBinary); err == nil {
+		return downloadedBinary, nil
+	}
+
+	return "", fmt.Errorf("在 %s 或 %s 中未找到 %s 工具", extractedBinary, downloadedBinary, openshiftInstallCmd)
+}
+
+// moveAndCountFiles moves files from src to dst, ignoring specified files, and returns the count.
+func (g *PXEGenerator) moveAndCountFiles(srcDir, dstDir string, ignore map[string]bool) (int, error) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return 0, fmt.Errorf("读取目录 %s 失败: %w", srcDir, err)
+	}
+
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() || (ignore != nil && ignore[entry.Name()]) {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+		if err := utils.MoveFile(srcPath, dstPath); err == nil {
+			count++
+		} else {
+			g.printWarning(fmt.Sprintf("移动文件 %s 失败", entry.Name()), err)
+		}
+	}
+	return count, nil
+}
+
+// --- Console Output Formatting (Alignment Fixed) ---
+
+// padRight pads a string with spaces on the right, respecting multi-width characters.
+func padRight(s string, totalWidth int) string {
+	return s + strings.Repeat(" ", totalWidth-runewidth.StringWidth(s))
+}
+
+func (g *PXEGenerator) printHeader(title, clusterName string) {
+	fullTitle := fmt.Sprintf("%s - %s", title, clusterName)
+	fmt.Printf("\n╔══════════════════════════════════════════════════════════════╗\n")
+	fmt.Printf("║ %s ║\n", padRight(fullTitle, 60))
+	fmt.Printf("╚══════════════════════════════════════════════════════════════╝\n\n")
+}
+
+func (g *PXEGenerator) printStep(current, total int, description string) {
+	fmt.Printf("📋 [%d/%d] %s\n", current, total, description)
+}
+
+func (g *PXEGenerator) printSuccess(message string) {
+	fmt.Printf("   ✅ %s\n\n", message)
+}
+
+func (g *PXEGenerator) printError(title string, err error) {
+	fmt.Printf("   ❌ %s: %v\n\n", title, err)
+}
+
+func (g *PXEGenerator) printWarning(title string, err error) {
+	fmt.Printf("   ⚠️  %s: %v\n", title, err)
+}
+
+func (g *PXEGenerator) printInfo(message string) {
+	fmt.Printf("   ℹ️  %s\n", message)
+}
+
+func (g *PXEGenerator) printManualUploadInstructions(pxeDir string) {
+	filesPath := filepath.Join(pxeDir, filesDirName)
+	sshUser := g.Config.Bastion.Username
+	sshIP := g.Config.Bastion.IP
+
+	fmt.Printf("\n📋 手动上传步骤:\n")
+	fmt.Printf("┌─────────────────────────────────────────────────────────────┐\n")
+	fmt.Printf("│ 1. 使用上传脚本:                                            │\n")
+	fmt.Printf("│    ssh %s@%s 'sudo %s %s' │\n", sshUser, sshIP, uploadScriptPath, filesPath)
+	fmt.Printf("│                                                             │\n")
+	fmt.Printf("│ 2. 或手动复制文件:                                          │\n")
+	fmt.Printf("│    scp %s/* %s@%s:/tmp/                │\n", filesPath, sshUser, sshIP)
+	fmt.Printf("│    ssh %s@%s 'sudo cp /tmp/agent.x86_64-* /var/www/html/pxe/%s/' │\n", sshUser, sshIP, g.ClusterName)
+	fmt.Printf("│                                                             │\n")
+	fmt.Printf("│ 3. 验证文件访问:                                            │\n")
+	fmt.Printf("│    curl http://%s:%d/pxe/%s/                         │\n", sshIP, defaultPxeWebServerPort, g.ClusterName)
+	fmt.Printf("└─────────────────────────────────────────────────────────────┘\n\n")
+}
+
+func (g *PXEGenerator) printCompletion(pxeDir string) {
+	pxeURL := fmt.Sprintf("http://%s:%d/pxe/%s", g.Config.Bastion.IP, defaultPxeWebServerPort, g.ClusterName)
+	fmt.Printf("╔══════════════════════════════════════════════════════════════╗\n")
+	fmt.Printf("║ %s ║\n", padRight("✅ PXE 文件生成完成！", 60))
+	fmt.Printf("║ %s ║\n", padRight("", 60))
+	fmt.Printf("║ %s ║\n", padRight(fmt.Sprintf("📁 文件位置: %s", pxeDir), 60))
+	fmt.Printf("║ %s ║\n", padRight(fmt.Sprintf("🌐 PXE 服务器: %s", pxeURL), 60))
+	fmt.Printf("║ %s ║\n", padRight("", 60))
+	fmt.Printf("║ %s ║\n", padRight("🚀 下一步: 配置目标机器从 PXE 启动", 60))
+	fmt.Printf("╚══════════════════════════════════════════════════════════════╝\n")
 }
