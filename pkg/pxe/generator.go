@@ -338,7 +338,7 @@ func (g *PXEGenerator) generateInstallConfigFromTemplate(configPath string) erro
 		NoProxy               string
 	}{
 		BaseDomain:            g.Config.ClusterInfo.Domain,
-		ClusterName:           g.Config.ClusterInfo.Name,
+		ClusterName:           g.Config.ClusterInfo.ClusterID,
 		NumWorkers:            len(g.Config.Cluster.Worker),
 		NumMasters:            len(g.Config.Cluster.ControlPlane),
 		MachineNetwork:        utils.ExtractNetworkBase(g.Config.Cluster.Network.MachineNetwork),
@@ -398,7 +398,7 @@ func (g *PXEGenerator) generateAgentConfigFromTemplate(configPath, assetServerUR
 	}
 
 	data := AgentConfigDataPXE{
-		ClusterName:          g.Config.ClusterInfo.Name,
+		ClusterName:          g.Config.ClusterInfo.ClusterID,
 		RendezvousIP:         g.Config.Cluster.ControlPlane[0].IP,
 		Hosts:                hosts,
 		Port0:                defaultInterface,
@@ -454,7 +454,7 @@ func (g *PXEGenerator) getSSHKey() (string, error) {
 func (g *PXEGenerator) getAdditionalTrustBundle() (string, error) {
 	possibleCertPaths := []string{
 		filepath.Join(g.ClusterDir, registryDirName, g.Config.Registry.IP, "rootCA.pem"),
-		filepath.Join(g.ClusterDir, registryDirName, fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain), "rootCA.pem"),
+		filepath.Join(g.ClusterDir, registryDirName, fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain), "rootCA.pem"),
 		filepath.Join(g.ClusterDir, registryDirName, "rootCA.pem"),
 	}
 
@@ -634,7 +634,7 @@ func (g *PXEGenerator) updateIPXEScript(filesDir, assetServerURL string) error {
 // findOpenshiftInstall locates the openshift-install binary.
 func (g *PXEGenerator) findOpenshiftInstall() (string, error) {
 	// Prioritize the version extracted from the local registry
-	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain)
 	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("%s-%s-%s", openshiftInstallCmd, g.Config.ClusterInfo.OpenShiftVersion, registryHost))
 	if _, err := os.Stat(extractedBinary); err == nil {
 		return extractedBinary, nil

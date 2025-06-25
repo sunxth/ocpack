@@ -170,7 +170,7 @@ cluster_dir: "%s"
 
 cluster:
   control_plane:
-`, ae.config.ClusterInfo.Name, ae.config.ClusterInfo.Domain, ae.config.ClusterInfo.ClusterID, ae.config.Bastion.IP, ae.config.Registry.IP, ae.config.Registry.StoragePath, ae.config.Registry.RegistryUser, currentDir, clusterDir)
+`, ae.config.ClusterInfo.ClusterID, ae.config.ClusterInfo.Domain, ae.config.ClusterInfo.ClusterID, ae.config.Bastion.IP, ae.config.Registry.IP, ae.config.Registry.StoragePath, ae.config.Registry.RegistryUser, currentDir, clusterDir)
 
 	// 添加 Control Plane 节点
 	for _, cp := range ae.config.Cluster.ControlPlane {

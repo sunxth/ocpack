@@ -30,11 +30,13 @@ const (
 	isoDirName            = "iso"
 	tempDirName           = "temp"
 	registryDirName       = "registry"
-	ocMirrorWorkspaceDir  = "oc-mirror-workspace"
+	ocMirrorWorkspaceDir  = "working-dir"
+	clusterResourcesDir   = "cluster-resources"
 	imagesDirName         = "images"
 	installConfigFilename = "install-config.yaml"
 	agentConfigFilename   = "agent-config.yaml"
 	icspFilename          = "imageContentSourcePolicy.yaml"
+	idmsFilename          = "idms-oc-mirror.yaml"
 	pullSecretFilename    = "pull-secret.txt"
 	mergedAuthFilename    = "merged-auth.json"
 	tempIcspFilename      = ".icsp.yaml"
@@ -114,6 +116,23 @@ type ICSP struct {
 	} `yaml:"spec"`
 }
 
+// IDMS represents the structure for parsing ImageDigestMirrorSet YAML files
+type IDMS struct {
+	TypeMeta struct {
+		APIVersion string `yaml:"apiVersion"`
+		Kind       string `yaml:"kind"`
+	} `yaml:",inline"`
+	ObjectMeta struct {
+		Name string `yaml:"name"`
+	} `yaml:"metadata"`
+	Spec struct {
+		ImageDigestMirrors []struct {
+			Source  string   `yaml:"source"`
+			Mirrors []string `yaml:"mirrors"`
+		} `yaml:"imageDigestMirrors"`
+	} `yaml:"spec"`
+}
+
 // --- Main Logic ---
 
 // NewISOGenerator 创建新的 ISO 生成器
@@ -135,7 +154,7 @@ func NewISOGenerator(clusterName, projectRoot string) (*ISOGenerator, error) {
 	}, nil
 }
 
-// GenerateISO 作为“编排器”来协调整个 ISO 生成流程
+// GenerateISO 作为"编排器"来协调整个 ISO 生成流程
 func (g *ISOGenerator) GenerateISO(options *GenerateOptions) error {
 	fmt.Printf("▶️  开始为集群 %s 生成 ISO 镜像\n", g.ClusterName)
 
@@ -239,14 +258,19 @@ func (g *ISOGenerator) generateInstallConfig(installDir string) error {
 		fmt.Printf("ℹ️  未找到 CA 证书，将跳过: %v\n", err)
 	}
 
-	imageContentSources, err := g.findAndParseICSP()
+	// 优先使用 IDMS，回退到 ICSP
+	imageContentSources, err := g.findAndParseIDMS()
 	if err != nil {
-		fmt.Printf("ℹ️  未找到 ICSP 文件，将跳过: %v\n", err)
+		fmt.Printf("ℹ️  未找到 IDMS 文件，尝试查找 ICSP: %v\n", err)
+		imageContentSources, err = g.findAndParseICSP()
+		if err != nil {
+			fmt.Printf("ℹ️  未找到镜像源配置文件，将跳过: %v\n", err)
+		}
 	}
 
 	data := InstallConfigData{
 		BaseDomain:            g.Config.ClusterInfo.Domain,
-		ClusterName:           g.Config.ClusterInfo.Name,
+		ClusterName:           g.Config.ClusterInfo.ClusterID,
 		NumWorkers:            len(g.Config.Cluster.Worker),
 		NumMasters:            len(g.Config.Cluster.ControlPlane),
 		MachineNetwork:        utils.ExtractNetworkBase(g.Config.Cluster.Network.MachineNetwork),
@@ -290,7 +314,7 @@ func (g *ISOGenerator) generateAgentConfig(installDir string) error {
 	}
 
 	data := AgentConfigData{
-		ClusterName:    g.Config.ClusterInfo.Name,
+		ClusterName:    g.Config.ClusterInfo.ClusterID,
 		RendezvousIP:   g.Config.Cluster.ControlPlane[0].IP,
 		Hosts:          hosts,
 		Port0:          defaultInterface,
@@ -526,13 +550,27 @@ func (g *ISOGenerator) findLatestResultsDir(workspaceDir string) (string, error)
 
 // findOpenshiftInstall 查找可用的 openshift-install 二进制文件
 func (g *ISOGenerator) findOpenshiftInstall() (string, error) {
-	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	// 1. 首先尝试提取的二进制文件
+	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain)
 	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("%s-%s-%s", openshiftInstallCmd, g.Config.ClusterInfo.OpenShiftVersion, registryHost))
 	if _, err := os.Stat(extractedBinary); err == nil {
 		fmt.Printf("ℹ️  使用从 Registry 提取的 openshift-install: %s\n", extractedBinary)
 		return extractedBinary, nil
 	}
 
+	// 2. 尝试从 registry 提取 openshift-install
+	fmt.Printf("ℹ️  尝试从私有 registry 提取 openshift-install 工具...\n")
+	if err := g.extractOpenshiftInstall(); err != nil {
+		fmt.Printf("⚠️  从 registry 提取失败: %v\n", err)
+	} else {
+		// 再次检查提取的二进制文件
+		if _, err := os.Stat(extractedBinary); err == nil {
+			fmt.Printf("✅ 成功从 Registry 提取 openshift-install: %s\n", extractedBinary)
+			return extractedBinary, nil
+		}
+	}
+
+	// 3. 回退到下载的二进制文件
 	downloadedBinary := filepath.Join(g.DownloadDir, "bin", openshiftInstallCmd)
 	if _, err := os.Stat(downloadedBinary); err == nil {
 		fmt.Printf("ℹ️  使用下载的 openshift-install: %s\n", downloadedBinary)
@@ -540,6 +578,148 @@ func (g *ISOGenerator) findOpenshiftInstall() (string, error) {
 	}
 
 	return "", fmt.Errorf("在 %s 或 %s 中均未找到 %s 工具", extractedBinary, downloadedBinary, openshiftInstallCmd)
+}
+
+// extractOpenshiftInstall 从私有 registry 提取 openshift-install 工具
+func (g *ISOGenerator) extractOpenshiftInstall() error {
+	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain)
+
+	// 构建认证文件路径
+	pullSecretPath := filepath.Join(g.ClusterDir, registryDirName, mergedAuthFilename)
+	if _, err := os.Stat(pullSecretPath); os.IsNotExist(err) {
+		pullSecretPath = filepath.Join(g.ClusterDir, pullSecretFilename)
+	}
+
+	outputPath := filepath.Join(g.ClusterDir, fmt.Sprintf("%s-%s-%s", openshiftInstallCmd, g.Config.ClusterInfo.OpenShiftVersion, registryHost))
+
+	// 尝试多种镜像标签格式
+	imageVariants := []string{
+		fmt.Sprintf("%s:8443/openshift/release-images:%s-x86_64", registryHost, g.Config.ClusterInfo.OpenShiftVersion),
+		fmt.Sprintf("%s:8443/openshift/release-images:%s", registryHost, g.Config.ClusterInfo.OpenShiftVersion),
+	}
+
+	for _, imageRef := range imageVariants {
+		fmt.Printf("ℹ️  尝试镜像引用: %s\n", imageRef)
+
+		// 第一步：使用 skopeo 检查并获取镜像摘要
+		fmt.Printf("ℹ️  使用 skopeo 获取镜像摘要...\n")
+		digest, err := g.getImageDigestWithSkopeo(imageRef, pullSecretPath)
+		if err != nil {
+			fmt.Printf("⚠️  获取摘要失败: %v\n", err)
+			continue
+		}
+
+		if digest == "" {
+			fmt.Printf("⚠️  未找到镜像摘要\n")
+			continue
+		}
+
+		// 第二步：使用摘要提取 openshift-install
+		releaseImageWithDigest := fmt.Sprintf("%s:8443/openshift/release-images@%s", registryHost, digest)
+		fmt.Printf("ℹ️  使用摘要提取: %s\n", releaseImageWithDigest)
+
+		err = g.extractWithDigest(releaseImageWithDigest, outputPath, pullSecretPath)
+		if err != nil {
+			fmt.Printf("⚠️  使用摘要提取失败: %v\n", err)
+			// 尝试直接使用标签提取
+			fmt.Printf("ℹ️  回退到标签提取: %s\n", imageRef)
+			err = g.extractWithTag(imageRef, outputPath, pullSecretPath)
+			if err != nil {
+				fmt.Printf("⚠️  标签提取也失败: %v\n", err)
+				continue
+			}
+		}
+
+		// 如果成功，返回
+		return nil
+	}
+
+	return fmt.Errorf("所有镜像引用尝试都失败了")
+}
+
+// getImageDigestWithSkopeo 使用 skopeo 获取镜像摘要
+func (g *ISOGenerator) getImageDigestWithSkopeo(imageRef, authFile string) (string, error) {
+	// 使用 skopeo inspect 检查镜像并获取摘要
+	cmd := exec.Command("skopeo", "inspect",
+		"--authfile", authFile,
+		"--tls-verify=false",
+		fmt.Sprintf("docker://%s", imageRef))
+
+	fmt.Printf("ℹ️  执行命令: %s\n", cmd.String())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("skopeo inspect 失败: %w, 输出: %s", err, string(output))
+	}
+
+	// 解析 skopeo inspect 输出
+	var inspectResult struct {
+		Digest string `json:"Digest"`
+	}
+
+	if err := json.Unmarshal(output, &inspectResult); err != nil {
+		return "", fmt.Errorf("解析 skopeo inspect 输出失败: %w", err)
+	}
+
+	if inspectResult.Digest == "" {
+		return "", fmt.Errorf("镜像摘要为空")
+	}
+
+	fmt.Printf("ℹ️  获取到镜像摘要: %s\n", inspectResult.Digest)
+	return inspectResult.Digest, nil
+}
+
+// extractWithTag 使用标签提取 openshift-install（回退方法）
+func (g *ISOGenerator) extractWithTag(releaseImage, outputPath, pullSecretPath string) error {
+	cmd := exec.Command("oc", "adm", "release", "extract",
+		"--command=openshift-install",
+		"--to="+filepath.Dir(outputPath),
+		"--registry-config="+pullSecretPath,
+		"--insecure",
+		releaseImage)
+
+	fmt.Printf("ℹ️  执行命令: %s\n", cmd.String())
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("提取 openshift-install 失败: %w, 输出: %s", err, string(output))
+	}
+
+	return g.finalizeExtraction(outputPath)
+}
+
+// extractWithDigest 使用摘要提取 openshift-install
+func (g *ISOGenerator) extractWithDigest(releaseImage, outputPath, pullSecretPath string) error {
+	cmd := exec.Command("oc", "adm", "release", "extract",
+		"--command=openshift-install",
+		"--to="+filepath.Dir(outputPath),
+		"--registry-config="+pullSecretPath,
+		"--insecure",
+		releaseImage)
+
+	fmt.Printf("ℹ️  执行命令: %s\n", cmd.String())
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("提取 openshift-install 失败: %w, 输出: %s", err, string(output))
+	}
+
+	return g.finalizeExtraction(outputPath)
+}
+
+// finalizeExtraction 完成提取过程的文件重命名和权限设置
+func (g *ISOGenerator) finalizeExtraction(outputPath string) error {
+	// 重命名提取的文件
+	extractedFile := filepath.Join(filepath.Dir(outputPath), openshiftInstallCmd)
+	if err := os.Rename(extractedFile, outputPath); err != nil {
+		return fmt.Errorf("重命名提取的 openshift-install 失败: %w", err)
+	}
+
+	// 设置可执行权限
+	if err := os.Chmod(outputPath, 0755); err != nil {
+		return fmt.Errorf("设置 openshift-install 权限失败: %w", err)
+	}
+
+	return nil
 }
 
 // createMergedAuthConfig 创建包含私有仓库认证的 pull-secret 文件
@@ -562,7 +742,7 @@ func (g *ISOGenerator) createMergedAuthConfig() error {
 		return errors.New("pull-secret.txt 格式无效: 缺少 'auths' 字段")
 	}
 
-	registryHostname := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.Name, g.Config.ClusterInfo.Domain)
+	registryHostname := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain)
 	registryURL := fmt.Sprintf("%s:8443", registryHostname)
 
 	authString := fmt.Sprintf("%s:ztesoft123", g.Config.Registry.RegistryUser)
@@ -590,4 +770,72 @@ func (g *ISOGenerator) createMergedAuthConfig() error {
 
 	fmt.Printf("✅ 认证配置已保存到: %s\n", mergedAuthPath)
 	return nil
+}
+
+// findAndParseIDMS 查找并解析 IDMS 文件
+func (g *ISOGenerator) findAndParseIDMS() (string, error) {
+	// 首先查找 cluster-resources 目录中的 IDMS 文件
+	clusterResourcesDir := filepath.Join(g.ClusterDir, imagesDirName, ocMirrorWorkspaceDir, clusterResourcesDir)
+	idmsFile := filepath.Join(clusterResourcesDir, idmsFilename)
+
+	if _, err := os.Stat(idmsFile); err == nil {
+		fmt.Printf("ℹ️  使用集群资源目录中的 IDMS 文件: %s\n", idmsFile)
+		return g.parseIDMSFile(idmsFile)
+	}
+
+	// 回退到在 working-dir 下查找
+	workspaceDir, err := g.findOcMirrorWorkspace()
+	if err != nil {
+		return "", err
+	}
+
+	latestResultsDir, err := g.findLatestResultsDir(workspaceDir)
+	if err != nil {
+		return "", fmt.Errorf("查找最新 results 目录失败: %w", err)
+	}
+
+	idmsFile = filepath.Join(latestResultsDir, idmsFilename)
+	if _, err := os.Stat(idmsFile); err == nil {
+		fmt.Printf("ℹ️  使用 results 目录中的 IDMS 文件: %s\n", idmsFile)
+		return g.parseIDMSFile(idmsFile)
+	}
+
+	return "", fmt.Errorf("未找到 IDMS 文件 %s", idmsFilename)
+}
+
+// parseIDMSFile 解析 IDMS 文件内容
+func (g *ISOGenerator) parseIDMSFile(filePath string) (string, error) {
+	idmsContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("读取 IDMS 文件 %s 失败: %w", filePath, err)
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(idmsContent))
+	var resultBuilder strings.Builder
+
+	for {
+		var idmsDoc IDMS
+		if err := decoder.Decode(&idmsDoc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("解析 IDMS YAML 文档失败: %w", err)
+		}
+
+		// 仅处理 ImageDigestMirrorSet 类型的文档
+		if idmsDoc.TypeMeta.Kind != "ImageDigestMirrorSet" {
+			continue
+		}
+
+		for _, idm := range idmsDoc.Spec.ImageDigestMirrors {
+			mirrorBlock := fmt.Sprintf("- mirrors:\n  - %s\n  source: %s", strings.Join(idm.Mirrors, "\n  - "), idm.Source)
+			resultBuilder.WriteString(mirrorBlock)
+			resultBuilder.WriteString("\n")
+		}
+	}
+
+	if resultBuilder.Len() == 0 {
+		return "", errors.New("IDMS 文件中未找到有效的镜像源配置")
+	}
+	return strings.TrimSpace(resultBuilder.String()), nil
 }

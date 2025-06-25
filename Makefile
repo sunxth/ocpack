@@ -11,7 +11,7 @@ BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
 # Go 构建参数
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME) -s -w"
-GO_BUILD := go build $(LDFLAGS)
+GO_BUILD := CGO_ENABLED=0 go build -tags "containers_image_openpgp" $(LDFLAGS)
 
 # 支持的平台和架构
 PLATFORMS := \

@@ -13,9 +13,8 @@ import (
 type ClusterConfig struct {
 	// 集群基本信息
 	ClusterInfo struct {
-		Name             string `toml:"name"`
+		ClusterID        string `toml:"cluster_id"` // 集群ID，用于构建域名和标识
 		Domain           string `toml:"domain"`
-		ClusterID        string `toml:"cluster_id"`
 		OpenShiftVersion string `toml:"openshift_version"`
 	} `toml:"cluster_info"`
 
@@ -69,10 +68,21 @@ type ClusterConfig struct {
 	// 镜像保存配置
 	SaveImage struct {
 		IncludeOperators bool     `toml:"include_operators"`
-		OperatorCatalog  string   `toml:"operator_catalog"`
+		OperatorCatalog  string   `toml:"operator_catalog,omitempty"` // 可选，如果为空则自动基于版本生成
 		Ops              []string `toml:"ops"`
 		AdditionalImages []string `toml:"additional_images"`
 	} `toml:"save_image"`
+}
+
+// GetOperatorCatalog 获取 Operator 目录镜像地址
+// 如果手动配置了 OperatorCatalog，则使用配置的值
+// 否则根据 OpenShift 版本自动生成
+func (c *ClusterConfig) GetOperatorCatalog() string {
+	if c.SaveImage.OperatorCatalog != "" {
+		return c.SaveImage.OperatorCatalog
+	}
+	majorVersion := utils.ExtractMajorVersion(c.ClusterInfo.OpenShiftVersion)
+	return fmt.Sprintf("registry.redhat.io/redhat/redhat-operator-index:v%s", majorVersion)
 }
 
 // NewDefaultConfig 创建默认配置
@@ -80,9 +90,8 @@ func NewDefaultConfig(clusterName string) *ClusterConfig {
 	config := &ClusterConfig{}
 
 	// 设置默认值
-	config.ClusterInfo.Name = clusterName
-	config.ClusterInfo.Domain = "example.com"
 	config.ClusterInfo.ClusterID = clusterName
+	config.ClusterInfo.Domain = "example.com"
 	config.ClusterInfo.OpenShiftVersion = "4.14.0"
 
 	config.Bastion.Username = "root"
@@ -120,7 +129,7 @@ func NewDefaultConfig(clusterName string) *ClusterConfig {
 
 	// 设置镜像保存默认值
 	config.SaveImage.IncludeOperators = false
-	config.SaveImage.OperatorCatalog = fmt.Sprintf("registry.redhat.io/redhat/redhat-operator-index:v%s", utils.ExtractMajorVersion(config.ClusterInfo.OpenShiftVersion))
+	// 不再设置 OperatorCatalog 默认值，将通过 GetOperatorCatalog() 方法自动生成
 	config.SaveImage.Ops = []string{
 		// 示例 Operator，用户可以根据需要修改
 		"cluster-logging",
@@ -142,9 +151,8 @@ func GenerateDefaultConfig(filePath string, clusterName string) error {
 # 请根据实际环境修改以下配置项
 
 [cluster_info]
-name = "%s"                    # 集群名称
+cluster_id = "%s"              # 集群ID，用于构建域名 (如 api.cluster_id.domain)
 domain = "%s"                  # 集群域名
-cluster_id = "%s"              # 集群ID
 openshift_version = "%s"       # OpenShift 版本
 
 [bastion]
@@ -198,16 +206,16 @@ local_path = "%s"              # 下载文件存储路径
 
 [save_image]
 include_operators = %t         # 是否包含 Operator 镜像
-operator_catalog = "%s"        # Operator 目录镜像 (自动设置)
+# operator_catalog 会根据 openshift_version 自动设置为:
+# registry.redhat.io/redhat/redhat-operator-index:v<主版本号>
 ops = [                        # 需要的 Operator 列表
   "%s",
   "%s"
 ]
 additional_images = []         # 额外的镜像列表
 `,
-		config.ClusterInfo.Name,
-		config.ClusterInfo.Domain,
 		config.ClusterInfo.ClusterID,
+		config.ClusterInfo.Domain,
 		config.ClusterInfo.OpenShiftVersion,
 		config.Bastion.Username,
 		config.Registry.Username,
@@ -218,7 +226,6 @@ additional_images = []         # 额外的镜像列表
 		config.Cluster.Network.MachineNetwork,
 		config.Download.LocalPath,
 		config.SaveImage.IncludeOperators,
-		config.SaveImage.OperatorCatalog,
 		config.SaveImage.Ops[0],
 		config.SaveImage.Ops[1],
 	)
@@ -263,14 +270,11 @@ func SaveConfig(config *ClusterConfig, filePath string) error {
 // ValidateConfig 验证配置是否有效
 func ValidateConfig(config *ClusterConfig) error {
 	// 验证集群基本信息
-	if config.ClusterInfo.Name == "" {
-		return fmt.Errorf("集群名称不能为空")
+	if config.ClusterInfo.ClusterID == "" {
+		return fmt.Errorf("集群ID不能为空")
 	}
 	if config.ClusterInfo.Domain == "" {
 		return fmt.Errorf("集群域名不能为空")
-	}
-	if config.ClusterInfo.ClusterID == "" {
-		return fmt.Errorf("集群ID不能为空")
 	}
 	if config.ClusterInfo.OpenShiftVersion == "" {
 		return fmt.Errorf("OpenShift版本不能为空")
@@ -347,14 +351,11 @@ func ValidateConfig(config *ClusterConfig) error {
 // ValidateBastionConfig 验证 Bastion 部署所需的配置
 func ValidateBastionConfig(config *ClusterConfig) error {
 	// 验证集群基本信息
-	if config.ClusterInfo.Name == "" {
-		return fmt.Errorf("集群名称不能为空")
+	if config.ClusterInfo.ClusterID == "" {
+		return fmt.Errorf("集群ID不能为空")
 	}
 	if config.ClusterInfo.Domain == "" {
 		return fmt.Errorf("集群域名不能为空")
-	}
-	if config.ClusterInfo.ClusterID == "" {
-		return fmt.Errorf("集群ID不能为空")
 	}
 	if config.ClusterInfo.OpenShiftVersion == "" {
 		return fmt.Errorf("OpenShift版本不能为空")
@@ -418,8 +419,8 @@ func ValidateBastionConfig(config *ClusterConfig) error {
 // ValidateRegistryConfig 验证 Registry 部署所需的配置
 func ValidateRegistryConfig(config *ClusterConfig) error {
 	// 验证集群基本信息
-	if config.ClusterInfo.Name == "" {
-		return fmt.Errorf("集群名称不能为空")
+	if config.ClusterInfo.ClusterID == "" {
+		return fmt.Errorf("集群ID不能为空")
 	}
 	if config.ClusterInfo.OpenShiftVersion == "" {
 		return fmt.Errorf("OpenShift版本不能为空")
@@ -453,28 +454,37 @@ func ValidateRegistryConfigWithDownloads(config *ClusterConfig, downloadDir stri
 	requiredFiles := []struct {
 		path        string
 		description string
+		required    bool
 	}{
 		{
 			path:        downloadDir + "/mirror-registry-amd64.tar.gz",
 			description: "Quay 镜像仓库安装包",
+			required:    true,
 		},
 		{
 			path:        downloadDir + "/bin/oc",
 			description: "OpenShift 客户端工具",
+			required:    true,
 		},
 		{
 			path:        downloadDir + "/bin/kubectl",
 			description: "Kubernetes 客户端工具",
+			required:    true,
 		},
 		{
 			path:        downloadDir + "/bin/oc-mirror",
-			description: "OpenShift 镜像同步工具",
+			description: "OpenShift 镜像同步工具 (可选)",
+			required:    false,
 		},
 	}
 
 	for _, file := range requiredFiles {
 		if _, err := os.Stat(file.path); os.IsNotExist(err) {
-			return fmt.Errorf("缺少必需的文件: %s (%s)\n请先运行 'ocpack download' 命令下载所需文件", file.path, file.description)
+			if file.required {
+				return fmt.Errorf("缺少必需的文件: %s (%s)\n请先运行 'ocpack download' 命令下载所需文件", file.path, file.description)
+			}
+			// 对于可选文件，只记录警告
+			fmt.Printf("ℹ️  可选文件不存在: %s (%s)\n", file.path, file.description)
 		}
 	}
 

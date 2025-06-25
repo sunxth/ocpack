@@ -166,8 +166,12 @@ ocpack/
 │   ├── config/     # 配置管理
 │   ├── deploy/     # 部署功能 (嵌入式 Ansible)
 │   ├── download/   # 工具下载
-│   ├── saveimage/  # 镜像保存
+│   ├── iso/        # ISO 生成
 │   ├── loadimage/  # 镜像加载
+│   ├── mirror/     # 镜像同步 (oc-mirror 包装器)
+│   ├── monitor/    # 监控功能
+│   ├── pxe/        # PXE 配置
+│   ├── day2/       # Day2 操作
 │   └── utils/      # 工具函数
 └── README.md
 ```

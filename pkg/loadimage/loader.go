@@ -97,7 +97,7 @@ func (l *ImageLoader) LoadToRegistry() error {
 	}
 
 	fmt.Println("\n🎉 镜像加载到 Quay registry 完成！")
-	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
+	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.ClusterID, l.Config.ClusterInfo.Domain)
 	fmt.Printf("   Registry URL: https://%s:8443\n", registryHostname)
 	fmt.Printf("   用户名: %s\n", l.Config.Registry.RegistryUser)
 	fmt.Printf("   密码: %s\n", registryPassword)
@@ -106,7 +106,7 @@ func (l *ImageLoader) LoadToRegistry() error {
 
 // validateRegistry checks the connection to the private registry.
 func (l *ImageLoader) validateRegistry() error {
-	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
+	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.ClusterID, l.Config.ClusterInfo.Domain)
 	registryURL := fmt.Sprintf("%s:8443", registryHostname)
 	fmt.Printf("ℹ️  正在验证 Quay registry 连接: %s\n", registryURL)
 
@@ -152,7 +152,7 @@ func (l *ImageLoader) createOrUpdateAuthConfig() error {
 		return errors.New("pull-secret 格式无效: 缺少 'auths' 字段")
 	}
 
-	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
+	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.ClusterID, l.Config.ClusterInfo.Domain)
 	registryURL := fmt.Sprintf("%s:8443", registryHostname)
 	authString := fmt.Sprintf("%s:%s", l.Config.Registry.RegistryUser, registryPassword)
 	authBase64 := base64.StdEncoding.EncodeToString([]byte(authString))
@@ -193,7 +193,7 @@ func (l *ImageLoader) runOcMirrorLoad() error {
 		return fmt.Errorf("oc-mirror 工具不存在: %s", ocMirrorPath)
 	}
 
-	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.Name, l.Config.ClusterInfo.Domain)
+	registryHostname := fmt.Sprintf("registry.%s.%s", l.Config.ClusterInfo.ClusterID, l.Config.ClusterInfo.Domain)
 	registryURL := fmt.Sprintf("docker://%s:8443", registryHostname)
 	imagesDir := filepath.Join(l.ClusterDir, imagesDirName)
 
@@ -272,7 +272,7 @@ func (l *ImageLoader) configureLinuxCertificateTrust(caCertPath string) error {
 		return errors.New("未找到系统证书目录 (如 /etc/pki/ca-trust/source/anchors 或 /usr/local/share/ca-certificates)")
 	}
 
-	certName := fmt.Sprintf("ocpack-registry-%s.crt", l.Config.ClusterInfo.Name)
+	certName := fmt.Sprintf("ocpack-registry-%s.crt", l.Config.ClusterInfo.ClusterID)
 	targetPath := filepath.Join(targetDir, certName)
 
 	fmt.Println("   为了使系统信任 registry 证书，需要 root 权限执行以下命令。")
