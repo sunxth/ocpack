@@ -197,8 +197,8 @@ func NewMirrorCmd(log clog.PluggableLoggerInterface) *cobra.Command {
 				log.Warn(emoji.Warning+"  Detected bad umask 00%o (oc-mirror requires a umask of 0022)", currentUmask)
 			}
 
-			log.Info(emoji.Gear + "  初始化镜像环境...")
-			log.Info(emoji.TwistedRighwardsArrows + "  准备镜像操作...")
+			log.Info(emoji.Gear + "  Initializing mirror environment...")
+			log.Info(emoji.TwistedRighwardsArrows + "  Preparing mirror operation...")
 
 			// Validate and set common flags
 			if len(opts.Global.WorkingDir) > 0 && !strings.Contains(opts.Global.WorkingDir, fileProtocol) {
@@ -531,7 +531,7 @@ func (o *ExecutorSchema) Run(cmd *cobra.Command, args []string) error {
 	o.stopLocalRegistry(cmd.Context())
 
 	o.Log.Info("mirror time     : %v", time.Since(startTime))
-	o.Log.Info(emoji.CheckMarkButton + " 镜像操作完成")
+	o.Log.Info(emoji.CheckMarkButton + " Mirror operation completed")
 
 	return err
 }

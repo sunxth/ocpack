@@ -50,7 +50,7 @@ func NewMirrorWrapper(logLevel string) (*MirrorWrapper, error) {
 
 // MirrorToDisk 执行镜像到磁盘操作
 func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 开始执行 mirror-to-disk 操作...")
+	w.log.Info("🔄 Starting mirror-to-disk operation...")
 
 	// 定义执行函数
 	executeFunc := func() error {
@@ -61,7 +61,7 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
-		w.log.Info("📋 使用配置生成器（基于 config.toml 配置）")
+		w.log.Info("📋 Using configuration generator (based on config.toml)")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("生成镜像配置失败: %v", err)
@@ -110,15 +110,15 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 			// 检查错误是否提到了部分失败但成功率较高的情况
 			if strings.Contains(err.Error(), "some errors occurred during the mirroring") {
 				// 这表示有部分镜像失败，但可能不是致命错误
-				w.log.Warn("⚠️  镜像同步过程中遇到一些问题，但可能不影响整体部署")
-				w.log.Warn("   详细信息: %v", err)
-				w.log.Info("💡 建议: 您可以选择忽略个别镜像的失败，继续后续部署流程")
-				w.log.Info("   如果后续部署出现问题，可以重新运行此命令重试失败的镜像")
+				w.log.Warn("⚠️  Some issues encountered during mirroring process, but may not affect overall deployment")
+				w.log.Warn("   Details: %v", err)
+				w.log.Info("💡 Suggestion: You can choose to ignore individual image failures and continue with subsequent deployment")
+				w.log.Info("   If deployment issues occur later, you can re-run this command to retry failed images")
 			}
 			return err
 		}
 
-		w.log.Info("✅ 镜像操作完成")
+		w.log.Info("✅ Mirror operation completed")
 		return nil
 	}
 
@@ -128,7 +128,7 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 
 // DiskToMirror 执行磁盘到仓库操作
 func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 开始执行 disk-to-mirror 操作...")
+	w.log.Info("🔄 Starting disk-to-mirror operation...")
 
 	// 定义执行函数
 	executeFunc := func() error {
@@ -139,7 +139,7 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
-		w.log.Info("📋 使用配置生成器（基于 config.toml 配置）")
+		w.log.Info("📋 Using configuration generator (based on config.toml)")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("生成镜像配置失败: %v", err)
@@ -189,15 +189,15 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 			// 检查错误是否提到了部分失败但成功率较高的情况
 			if strings.Contains(err.Error(), "some errors occurred during the mirroring") {
 				// 这表示有部分镜像失败，但可能不是致命错误
-				w.log.Warn("⚠️  镜像同步过程中遇到一些问题，但可能不影响整体部署")
-				w.log.Warn("   详细信息: %v", err)
-				w.log.Info("💡 建议: 您可以选择忽略个别镜像的失败，继续后续部署流程")
-				w.log.Info("   如果后续部署出现问题，可以重新运行此命令重试失败的镜像")
+				w.log.Warn("⚠️  Some issues encountered during mirroring process, but may not affect overall deployment")
+				w.log.Warn("   Details: %v", err)
+				w.log.Info("💡 Suggestion: You can choose to ignore individual image failures and continue with subsequent deployment")
+				w.log.Info("   If deployment issues occur later, you can re-run this command to retry failed images")
 			}
 			return err
 		}
 
-		w.log.Info("✅ 镜像操作完成")
+		w.log.Info("✅ Mirror operation completed")
 		return nil
 	}
 
@@ -207,7 +207,7 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 
 // MirrorDirect 执行直接镜像操作
 func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 开始执行 mirror-to-mirror 操作...")
+	w.log.Info("🔄 Starting mirror-to-mirror operation...")
 
 	// 定义执行函数
 	executeFunc := func() error {
@@ -266,15 +266,15 @@ func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, desti
 			// 检查错误是否提到了部分失败但成功率较高的情况
 			if strings.Contains(err.Error(), "some errors occurred during the mirroring") {
 				// 这表示有部分镜像失败，但可能不是致命错误
-				w.log.Warn("⚠️  镜像同步过程中遇到一些问题，但可能不影响整体部署")
-				w.log.Warn("   详细信息: %v", err)
-				w.log.Info("💡 建议: 您可以选择忽略个别镜像的失败，继续后续部署流程")
-				w.log.Info("   如果后续部署出现问题，可以重新运行此命令重试失败的镜像")
+				w.log.Warn("⚠️  Some issues encountered during mirroring process, but may not affect overall deployment")
+				w.log.Warn("   Details: %v", err)
+				w.log.Info("💡 Suggestion: You can choose to ignore individual image failures and continue with subsequent deployment")
+				w.log.Info("   If deployment issues occur later, you can re-run this command to retry failed images")
 			}
 			return err
 		}
 
-		w.log.Info("✅ 镜像操作完成")
+		w.log.Info("✅ Mirror operation completed")
 		return nil
 	}
 
@@ -307,7 +307,7 @@ func (w *MirrorWrapper) generateMirrorConfig(cfg *config.ClusterConfig) (*v2alph
 
 	// 添加 Operators 配置（如果启用）
 	if cfg.SaveImage.IncludeOperators && len(cfg.SaveImage.Ops) > 0 {
-		w.log.Info("📦 包含 Operator 镜像: %d 个 operators", len(cfg.SaveImage.Ops))
+		w.log.Info("📦 Including Operator images: %d operators", len(cfg.SaveImage.Ops))
 
 		// 构建 packages 列表
 		var packages []v2alpha1.IncludePackage
@@ -330,7 +330,7 @@ func (w *MirrorWrapper) generateMirrorConfig(cfg *config.ClusterConfig) (*v2alph
 
 	// 添加额外镜像配置（如果有）
 	if len(cfg.SaveImage.AdditionalImages) > 0 {
-		w.log.Info("📦 包含额外镜像: %d 个镜像", len(cfg.SaveImage.AdditionalImages))
+		w.log.Info("📦 Including additional images: %d images", len(cfg.SaveImage.AdditionalImages))
 
 		var additionalImages []v2alpha1.Image
 		for _, imgName := range cfg.SaveImage.AdditionalImages {
@@ -547,56 +547,35 @@ func (w *MirrorWrapper) executeWithRetry(executeFunc func() error, workingDir st
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt == 0 {
-			w.log.Info("🔄 开始镜像操作 (尝试 %d/%d)", attempt+1, maxRetries+1)
+			w.log.Info("🔄 Starting mirror operation (attempt %d/%d)", attempt+1, maxRetries+1)
 		} else {
-			w.log.Info("🔄 重试镜像操作 (尝试 %d/%d)", attempt+1, maxRetries+1)
+			w.log.Info("🔄 Retrying mirror operation (attempt %d/%d)", attempt+1, maxRetries+1)
 		}
 
 		err := executeFunc()
 		if err == nil {
-			w.log.Info("✅ 镜像操作成功完成")
+			w.log.Info("✅ Mirror operation completed successfully")
 			return nil
 		}
 
 		lastErr = err
 
 		// 检查是否包含部分失败的提示 - 如果已经有高成功率，不需要重试
-		if strings.Contains(err.Error(), "继续执行") {
-			w.log.Info("✅ 镜像操作部分成功，成功率较高，无需重试")
+		if strings.Contains(err.Error(), "some errors occurred during the mirroring") {
+			w.log.Info("✅ Mirror operation partially successful with high success rate, no retry needed")
 			return nil
 		}
 
 		// 如果还有重试机会，尝试重试失败的镜像
 		if attempt < maxRetries {
-			w.log.Warn("❌ 镜像操作失败: %v", err)
-			w.log.Info("🔍 正在分析失败的镜像，准备重试...")
-
-			// 查找最新的错误日志
-			errorLogFile, logErr := w.findLatestErrorLog(workingDir)
-			if logErr != nil {
-				w.log.Warn("⚠️  无法找到错误日志文件，将进行完整重试: %v", logErr)
-			} else {
-				// 解析失败的镜像
-				failedImages, parseErr := w.parseErrorLogFile(errorLogFile)
-				if parseErr != nil {
-					w.log.Warn("⚠️  无法解析错误日志，将进行完整重试: %v", parseErr)
-				} else if len(failedImages) > 0 {
-					w.log.Info("📋 发现 %d 个失败的镜像，将只重试这些镜像:", len(failedImages))
-					for i, img := range failedImages {
-						w.log.Info("   %d. %s", i+1, img)
-					}
-					// 这里可以进一步优化，创建只包含失败镜像的重试配置
-					// 但为了简单起见，我们先进行完整重试
-				}
-			}
-
-			w.log.Info("⏳ 等待 %d 秒后重试...", retryInterval)
+			w.log.Warn("❌ Mirror operation failed: %v", err)
+			w.log.Info("⏰ Waiting %d seconds before retry...", retryInterval)
 			time.Sleep(time.Duration(retryInterval) * time.Second)
 		}
 	}
 
-	w.log.Error("❌ 经过 %d 次重试后仍然失败", maxRetries)
-	return fmt.Errorf("镜像操作经过 %d 次重试后仍然失败: %v", maxRetries, lastErr)
+	w.log.Error("❌ Mirror operation failed after %d retries", maxRetries)
+	return fmt.Errorf("mirror operation failed after %d retries: %v", maxRetries, lastErr)
 }
 
 // setupAuthentication 设置认证配置
@@ -619,7 +598,7 @@ func (w *MirrorWrapper) setupAuthentication(cfg *config.ClusterConfig, clusterNa
 
 	// 检查合并认证文件是否已存在
 	if _, err := os.Stat(mergedAuthPath); err == nil {
-		w.log.Info("ℹ️  使用已存在的认证配置: %s", mergedAuthPath)
+		w.log.Info("ℹ️  Using existing authentication configuration: %s", mergedAuthPath)
 		return mergedAuthPath, nil
 	}
 

@@ -156,7 +156,7 @@ func NewISOGenerator(clusterName, projectRoot string) (*ISOGenerator, error) {
 
 // GenerateISO 作为"编排器"来协调整个 ISO 生成流程
 func (g *ISOGenerator) GenerateISO(options *GenerateOptions) error {
-	fmt.Printf("▶️  开始为集群 %s 生成 ISO 镜像\n", g.ClusterName)
+	fmt.Printf("▶️  Starting ISO image generation for cluster %s\n", g.ClusterName)
 
 	// --- 新增逻辑: 检查 ISO 是否已存在 ---
 	installDir := filepath.Join(g.ClusterDir, installDirName)
@@ -173,35 +173,35 @@ func (g *ISOGenerator) GenerateISO(options *GenerateOptions) error {
 
 	steps := 5
 	// 1. 验证配置和依赖
-	fmt.Printf("➡️  步骤 1/%d: 验证配置和依赖...\n", steps)
+	fmt.Printf("➡️  Step 1/%d: Validating configuration and dependencies...\n", steps)
 	if err := g.ValidateConfig(); err != nil {
 		return fmt.Errorf("配置验证失败: %w", err)
 	}
 	fmt.Println("✅ 配置验证通过")
 
 	// 2. 创建安装目录结构
-	fmt.Printf("➡️  步骤 2/%d: 创建安装目录结构...\n", steps)
+	fmt.Printf("➡️  Step 2/%d: Creating installation directory structure...\n", steps)
 	if err := g.createInstallationDirs(installDir); err != nil {
 		return fmt.Errorf("创建安装目录失败: %w", err)
 	}
 	fmt.Println("✅ 目录结构已创建")
 
 	// 3. 生成 install-config.yaml
-	fmt.Printf("➡️  步骤 3/%d: 生成 install-config.yaml...\n", steps)
+	fmt.Printf("➡️  Step 3/%d: Generating install-config.yaml...\n", steps)
 	if err := g.generateInstallConfig(installDir); err != nil {
 		return fmt.Errorf("生成 install-config.yaml 失败: %w", err)
 	}
 	fmt.Println("✅ install-config.yaml 已生成")
 
 	// 4. 生成 agent-config.yaml
-	fmt.Printf("➡️  步骤 4/%d: 生成 agent-config.yaml...\n", steps)
+	fmt.Printf("➡️  Step 4/%d: Generating agent-config.yaml...\n", steps)
 	if err := g.generateAgentConfig(installDir); err != nil {
 		return fmt.Errorf("生成 agent-config.yaml 失败: %w", err)
 	}
 	fmt.Println("✅ agent-config.yaml 已生成")
 
 	// 5. 生成 ISO 文件
-	fmt.Printf("➡️  步骤 5/%d: 生成 ISO 文件...\n", steps)
+	fmt.Printf("➡️  Step 5/%d: Generating ISO file...\n", steps)
 	generatedPath, err := g.generateISOFiles(installDir, targetISOPath)
 	if err != nil {
 		return fmt.Errorf("生成 ISO 文件失败: %w", err)
@@ -411,21 +411,21 @@ func (g *ISOGenerator) executeTemplate(templatePath, outputPath string, data int
 func (g *ISOGenerator) getPullSecret() (string, error) {
 	mergedAuthPath := filepath.Join(g.ClusterDir, registryDirName, mergedAuthFilename)
 	if _, err := os.Stat(mergedAuthPath); err == nil {
-		fmt.Println("ℹ️  使用已合并的认证文件 " + mergedAuthFilename)
+		fmt.Println("ℹ️  Using merged authentication file " + mergedAuthFilename)
 		secretBytes, err := os.ReadFile(mergedAuthPath)
 		if err != nil {
-			return "", fmt.Errorf("读取合并认证文件失败: %w", err)
+			return "", fmt.Errorf("failed to read merged auth file: %w", err)
 		}
 		return strings.TrimSpace(string(secretBytes)), nil
 	}
 
-	fmt.Println("ℹ️  合并认证文件不存在，将创建并使用它...")
+	fmt.Println("ℹ️  Merged authentication file not found, will create and use it...")
 	if err := g.createMergedAuthConfig(); err != nil {
-		fmt.Printf("⚠️  创建合并认证文件失败: %v。将回退到原始 pull-secret。\n", err)
+		fmt.Printf("⚠️  Failed to create merged authentication file: %v. Will fall back to original pull-secret.\n", err)
 		pullSecretPath := filepath.Join(g.ClusterDir, pullSecretFilename)
 		secretBytes, err := os.ReadFile(pullSecretPath)
 		if err != nil {
-			return "", fmt.Errorf("读取原始 pull-secret 失败: %w", err)
+			return "", fmt.Errorf("failed to read original pull-secret: %w", err)
 		}
 		return strings.TrimSpace(string(secretBytes)), nil
 	}
@@ -436,12 +436,12 @@ func (g *ISOGenerator) getPullSecret() (string, error) {
 func (g *ISOGenerator) getSSHKey() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("无法获取用户主目录: %w", err)
+		return "", fmt.Errorf("unable to get user home directory: %w", err)
 	}
 	sshKeyPath := filepath.Join(home, ".ssh", "id_rsa.pub")
 	sshKeyBytes, err := os.ReadFile(sshKeyPath)
 	if err != nil {
-		return "", fmt.Errorf("读取 SSH 公钥失败 (%s): %w", sshKeyPath, err)
+		return "", fmt.Errorf("failed to read SSH public key (%s): %w", sshKeyPath, err)
 	}
 	return strings.TrimSpace(string(sshKeyBytes)), nil
 }
@@ -468,7 +468,7 @@ func (g *ISOGenerator) findAndParseICSP() (string, error) {
 	}
 	latestResultsDir, err := g.findLatestResultsDir(workspaceDir)
 	if err != nil {
-		return "", fmt.Errorf("查找最新 results 目录失败: %w", err)
+		return "", fmt.Errorf("failed to find latest results directory: %w", err)
 	}
 
 	icspFile := filepath.Join(latestResultsDir, icspFilename)
@@ -554,18 +554,18 @@ func (g *ISOGenerator) findOpenshiftInstall() (string, error) {
 	registryHost := fmt.Sprintf("registry.%s.%s", g.Config.ClusterInfo.ClusterID, g.Config.ClusterInfo.Domain)
 	extractedBinary := filepath.Join(g.ClusterDir, fmt.Sprintf("%s-%s-%s", openshiftInstallCmd, g.Config.ClusterInfo.OpenShiftVersion, registryHost))
 	if _, err := os.Stat(extractedBinary); err == nil {
-		fmt.Printf("ℹ️  使用从 Registry 提取的 openshift-install: %s\n", extractedBinary)
+		fmt.Printf("ℹ️  Using openshift-install extracted from Registry: %s\n", extractedBinary)
 		return extractedBinary, nil
 	}
 
 	// 2. 尝试从 registry 提取 openshift-install
-	fmt.Printf("ℹ️  尝试从私有 registry 提取 openshift-install 工具...\n")
+	fmt.Printf("ℹ️  Attempting to extract openshift-install tool from private registry...\n")
 	if err := g.extractOpenshiftInstall(); err != nil {
-		fmt.Printf("⚠️  从 registry 提取失败: %v\n", err)
+		fmt.Printf("⚠️  Registry extraction failed: %v\n", err)
 	} else {
 		// 再次检查提取的二进制文件
 		if _, err := os.Stat(extractedBinary); err == nil {
-			fmt.Printf("✅ 成功从 Registry 提取 openshift-install: %s\n", extractedBinary)
+			fmt.Printf("✅ Successfully extracted openshift-install from Registry: %s\n", extractedBinary)
 			return extractedBinary, nil
 		}
 	}
@@ -573,11 +573,11 @@ func (g *ISOGenerator) findOpenshiftInstall() (string, error) {
 	// 3. 回退到下载的二进制文件
 	downloadedBinary := filepath.Join(g.DownloadDir, "bin", openshiftInstallCmd)
 	if _, err := os.Stat(downloadedBinary); err == nil {
-		fmt.Printf("ℹ️  使用下载的 openshift-install: %s\n", downloadedBinary)
+		fmt.Printf("ℹ️  Using downloaded openshift-install: %s\n", downloadedBinary)
 		return downloadedBinary, nil
 	}
 
-	return "", fmt.Errorf("在 %s 或 %s 中均未找到 %s 工具", extractedBinary, downloadedBinary, openshiftInstallCmd)
+	return "", fmt.Errorf("%s tool not found in either %s or %s", openshiftInstallCmd, extractedBinary, downloadedBinary)
 }
 
 // extractOpenshiftInstall 从私有 registry 提取 openshift-install 工具
@@ -599,42 +599,39 @@ func (g *ISOGenerator) extractOpenshiftInstall() error {
 	}
 
 	for _, imageRef := range imageVariants {
-		fmt.Printf("ℹ️  尝试镜像引用: %s\n", imageRef)
+		fmt.Printf("ℹ️  Trying image reference: %s\n", imageRef)
 
 		// 第一步：使用 skopeo 检查并获取镜像摘要
-		fmt.Printf("ℹ️  使用 skopeo 获取镜像摘要...\n")
+		fmt.Printf("ℹ️  Using skopeo to get image digest...\n")
 		digest, err := g.getImageDigestWithSkopeo(imageRef, pullSecretPath)
 		if err != nil {
-			fmt.Printf("⚠️  获取摘要失败: %v\n", err)
+			fmt.Printf("⚠️  Failed to get digest: %v\n", err)
 			continue
 		}
 
-		if digest == "" {
-			fmt.Printf("⚠️  未找到镜像摘要\n")
-			continue
-		}
+		// 第二步：使用摘要进行提取
+		releaseImageWithDigest := fmt.Sprintf("%s@%s", strings.Split(imageRef, ":")[0], digest)
+		fmt.Printf("ℹ️  Using digest for extraction: %s\n", releaseImageWithDigest)
 
-		// 第二步：使用摘要提取 openshift-install
-		releaseImageWithDigest := fmt.Sprintf("%s:8443/openshift/release-images@%s", registryHost, digest)
-		fmt.Printf("ℹ️  使用摘要提取: %s\n", releaseImageWithDigest)
-
-		err = g.extractWithDigest(releaseImageWithDigest, outputPath, pullSecretPath)
-		if err != nil {
-			fmt.Printf("⚠️  使用摘要提取失败: %v\n", err)
-			// 尝试直接使用标签提取
-			fmt.Printf("ℹ️  回退到标签提取: %s\n", imageRef)
-			err = g.extractWithTag(imageRef, outputPath, pullSecretPath)
-			if err != nil {
-				fmt.Printf("⚠️  标签提取也失败: %v\n", err)
+		if err := g.extractWithDigest(releaseImageWithDigest, outputPath, pullSecretPath); err != nil {
+			fmt.Printf("⚠️  Digest extraction failed: %v\n", err)
+			// 作为备选，尝试使用标签直接提取
+			if err := g.extractWithTag(imageRef, outputPath, pullSecretPath); err != nil {
+				fmt.Printf("⚠️  Tag extraction also failed: %v\n", err)
 				continue
 			}
 		}
 
-		// 如果成功，返回
+		// 验证提取的文件
+		if err := g.finalizeExtraction(outputPath); err != nil {
+			fmt.Printf("⚠️  File finalization failed: %v\n", err)
+			continue
+		}
+
 		return nil
 	}
 
-	return fmt.Errorf("所有镜像引用尝试都失败了")
+	return fmt.Errorf("failed to extract openshift-install from any image variant")
 }
 
 // getImageDigestWithSkopeo 使用 skopeo 获取镜像摘要
@@ -724,7 +721,7 @@ func (g *ISOGenerator) finalizeExtraction(outputPath string) error {
 
 // createMergedAuthConfig 创建包含私有仓库认证的 pull-secret 文件
 func (g *ISOGenerator) createMergedAuthConfig() error {
-	fmt.Println("🔐 创建合并的认证配置文件...")
+	fmt.Println("🔐  Creating merged authentication configuration file...")
 
 	pullSecretPath := filepath.Join(g.ClusterDir, pullSecretFilename)
 	pullSecretContent, err := os.ReadFile(pullSecretPath)
@@ -768,39 +765,37 @@ func (g *ISOGenerator) createMergedAuthConfig() error {
 		return fmt.Errorf("保存合并后的认证配置失败: %w", err)
 	}
 
-	fmt.Printf("✅ 认证配置已保存到: %s\n", mergedAuthPath)
+	fmt.Printf("✅  Authentication configuration saved to: %s\n", mergedAuthPath)
 	return nil
 }
 
-// findAndParseIDMS 查找并解析 IDMS 文件
+// findAndParseIDMS 查找并解析 IDMS (ImageDigestMirrorSet) 文件
 func (g *ISOGenerator) findAndParseIDMS() (string, error) {
-	// 首先查找 cluster-resources 目录中的 IDMS 文件
+	// 1. 首先在集群资源目录中查找
 	clusterResourcesDir := filepath.Join(g.ClusterDir, imagesDirName, ocMirrorWorkspaceDir, clusterResourcesDir)
 	idmsFile := filepath.Join(clusterResourcesDir, idmsFilename)
-
 	if _, err := os.Stat(idmsFile); err == nil {
-		fmt.Printf("ℹ️  使用集群资源目录中的 IDMS 文件: %s\n", idmsFile)
+		fmt.Printf("ℹ️  Using IDMS file from cluster resources directory: %s\n", idmsFile)
 		return g.parseIDMSFile(idmsFile)
 	}
 
-	// 回退到在 working-dir 下查找
+	// 2. 在 results 目录中查找
 	workspaceDir, err := g.findOcMirrorWorkspace()
 	if err != nil {
 		return "", err
 	}
-
 	latestResultsDir, err := g.findLatestResultsDir(workspaceDir)
 	if err != nil {
-		return "", fmt.Errorf("查找最新 results 目录失败: %w", err)
+		return "", fmt.Errorf("failed to find latest results directory: %w", err)
 	}
 
 	idmsFile = filepath.Join(latestResultsDir, idmsFilename)
 	if _, err := os.Stat(idmsFile); err == nil {
-		fmt.Printf("ℹ️  使用 results 目录中的 IDMS 文件: %s\n", idmsFile)
+		fmt.Printf("ℹ️  Using IDMS file from results directory: %s\n", idmsFile)
 		return g.parseIDMSFile(idmsFile)
 	}
 
-	return "", fmt.Errorf("未找到 IDMS 文件 %s", idmsFilename)
+	return "", fmt.Errorf("no IDMS file found in cluster resources or results directories")
 }
 
 // parseIDMSFile 解析 IDMS 文件内容
