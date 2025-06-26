@@ -93,6 +93,24 @@ func AddProgressSpinner(progressBar *mpb.Progress, message string, totalSize int
 	}
 }
 
+// 简洁版spinner - 只显示经过时间，去掉不准确的速度
+func AddCleanSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
+	return progressBar.AddSpinner(
+		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
+		mpb.BarWidth(2),
+		mpb.PrependDecorators(
+			decor.OnComplete(EmptyDecorator(), "✓"),
+			decor.OnAbort(EmptyDecorator(), "✗"),
+		),
+		mpb.AppendDecorators(
+			decor.Name(" "+message+" "),
+			decor.Elapsed(decor.ET_STYLE_MMSS), // 只显示经过时间，MM:SS格式
+		),
+		mpb.BarFillerClearOnComplete(),
+		BarFillerClearOnAbort(),
+	)
+}
+
 // 紧凑版spinner - 显示关键进度信息但保持简洁
 func AddCompactSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
@@ -129,6 +147,21 @@ func AddSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
+	)
+}
+
+// 简洁的整体进度条 - 只显示计数和百分比，去掉不准确的速度和ETA
+func AddCleanOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
+	return progressBar.AddBar(int64(total),
+		mpb.PrependDecorators(
+			decor.Name("📦 "),
+			decor.CountersNoUnit("%d/%d"),
+		),
+		mpb.AppendDecorators(
+			decor.Name(" "),
+			decor.Percentage(),
+		),
+		mpb.BarPriority(total+1),
 	)
 }
 

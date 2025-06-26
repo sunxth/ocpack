@@ -328,7 +328,7 @@ func logImageError(log clog.PluggableLoggerInterface, image *v2alpha1.CopyImageS
 }
 
 func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress) *mpb.Bar {
-	// 显示镜像名称和目标，以及进度信息
+	// 显示镜像名称和目标，只显示经过时间
 	imageName := path.Base(img.Origin)
 	var destination string
 	if strings.Contains(img.Destination, localStorage) {
@@ -343,11 +343,11 @@ func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progre
 
 	imageText := imageName + " → " + destination
 
-	return spinners.AddCompactSpinner(p, imageText)
+	return spinners.AddCleanSpinner(p, imageText)
 }
 
 func newOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
-	return spinners.AddEnhancedOverallProgress(p, total)
+	return spinners.AddCleanOverallProgress(p, total)
 }
 
 func runOverallProgress(overallProgress *mpb.Bar, cancelCtx context.Context, progressCh chan int) {

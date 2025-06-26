@@ -17,17 +17,18 @@
 
 **优化后：**
 ```
-⠙ image-name.tar → cache 1.2MB/s 00:15
-⠸ another-image.tar → registry.redhat.io/ubi8... 856KB/s 00:32
-⠼ operator-bundle.tar → quay.io/openshift... 2.1MB/s 00:08
+⠙ image-name.tar → cache 00:15
+⠸ another-image.tar → registry.redhat.io/ubi8... 00:32
+⠼ operator-bundle.tar → quay.io/openshift... 00:08
+✓ completed-image.tar → cache 00:45
 ```
 
 **改进点：**
-- 保留了关键的下载速度信息
-- 显示经过时间，但格式更紧凑（MM:SS）
+- 移除了不准确的速度显示（避免显示 0b/s）
+- 只显示可靠的经过时间信息（MM:SS格式）
 - 使用更简洁的 spinner 字符序列
 - 目标路径超过25字符时自动截断，添加 `...`
-- 平衡了信息量和界面简洁性
+- 界面清爽美观，没有错误的数据干扰
 
 ### 2. 优化的整体进度条
 
@@ -38,14 +39,15 @@
 
 **优化后：**
 ```
-📦 120/150 ████████████░░░░ 80% 15 img/min 02:30
+📦 120/150 ████████████░░░░ 80%
 ```
 
 **改进点：**
-- 增加了镜像处理速度显示（img/min）
-- 显示预估剩余时间（MM:SS格式）
+- 移除了不准确的速度和时间预估
+- 专注于核心进度信息：计数和百分比
 - 使用简洁的包裹图标 📦
 - 更紧凑的计数器格式 `120/150` 而不是 `120 / 150`
+- 界面简洁，没有误导性的数据
 
 ### 3. 简化的日志消息
 
@@ -102,10 +104,10 @@
 
 ### 新增函数
 
-1. **`AddCompactSpinner()`** - 紧凑风格的进度 spinner，显示速度和时间
-2. **`AddEnhancedOverallProgress()`** - 增强的整体进度条，显示处理速度和ETA
+1. **`AddCleanSpinner()`** - 简洁的进度 spinner，只显示可靠的时间信息
+2. **`AddCleanOverallProgress()`** - 简洁的整体进度条，专注核心信息
 3. **`AddMinimalSpinner()`** - 极简风格的进度 spinner（可选）
-4. **`AddProgressSpinner()`** - 支持文件大小进度的增强 spinner
+4. **`AddProgressSpinner()`** - 支持文件大小进度的增强 spinner（适用于有明确文件大小的场景）
 5. **`MinimalSpinnerLeft()`** - 优化的 spinner 动画序列
 
 ### 向后兼容
@@ -125,8 +127,8 @@
 - **优化后：** 统一格式，速度和时间信息一目了然
 
 ### 关键信息突出
-- **优化前：** 关键状态埋没在详细信息中
-- **优化后：** 下载速度、剩余时间、成功/失败状态清晰可见
+- **优化前：** 关键状态埋没在详细信息中，还有误导性的数据
+- **优化后：** 只显示可靠准确的信息，成功/失败状态清晰可见，无错误数据干扰
 
 ## 使用场景
 
