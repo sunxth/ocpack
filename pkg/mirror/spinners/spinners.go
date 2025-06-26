@@ -3,7 +3,6 @@ package spinners
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
@@ -22,9 +21,45 @@ const (
 	ColorPurple = "\033[35m" // 紫色
 )
 
-// 现代化spinner样式 - 使用更流畅的动画
+// 完成状态图标选择 - 您可以选择喜欢的
+const (
+	// 选项1: 经典勾选
+	CompletedIcon1 = "✓" // 简洁勾号
+	CompletedIcon2 = "✔" // 粗勾号
+	CompletedIcon3 = "✅" // 绿色方框勾号(当前)
+
+	// 选项2: 圆形图标
+	CompletedIcon4 = "🟢" // 绿色圆点
+	CompletedIcon5 = "⚫" // 黑色圆点
+	CompletedIcon6 = "●" // 实心圆点
+
+	// 选项3: 方形图标
+	CompletedIcon7 = "▣" // 方框勾号
+	CompletedIcon8 = "■" // 实心方块
+	CompletedIcon9 = "◼" // 中等方块
+
+	// 选项4: 箭头图标
+	CompletedIcon10 = "►" // 右箭头
+	CompletedIcon11 = "▶" // 播放图标
+	CompletedIcon12 = "→" // 简单箭头
+)
+
+// 当前使用的完成图标 - 您可以修改这里来选择不同的图标
+var CompletedIcon = CompletedIcon1 // 默认使用简洁勾号
+
+// 更和谐的动态spinner样式 - 使用圆形旋转动画
 func ModernSpinnerLeft(original mpb.BarFiller) mpb.BarFiller {
-	return mpb.SpinnerStyle("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", " ").PositionLeft().Build()
+	// 选项1: 圆形旋转动画 (用户要求)
+	return mpb.SpinnerStyle("◐", "◓", "◑", "◒").PositionLeft().Build()
+
+	// 选项2: 点状动画
+	// return mpb.SpinnerStyle("⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿", "⡿", "⠿", "⠟", "⠛", "⠙", "⠈", "⠁").PositionLeft().Build()
+
+	// 选项3: 经典旋转
+	// return mpb.SpinnerStyle("|", "/", "-", "\\").PositionLeft().Build()
+
+	// 选项4: 现代箭头
+	// return mpb.SpinnerStyle("←", "↖", "↑", "↗", "→", "↘", "↓", "↙").PositionLeft().Build()
 }
 
 func EmptyDecorator() decor.Decorator {
@@ -45,31 +80,28 @@ func BarFillerClearOnAbort() mpb.BarOption {
 	})
 }
 
-// 彩色增强版spinner - 固定风格
+// 彩色增强版spinner - 固定风格，时间前置
 func AddColorfulSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
 		1, mpb.BarFillerMiddleware(ModernSpinnerLeft),
 		mpb.BarWidth(2),
 		mpb.PrependDecorators(
-			decor.OnComplete(EmptyDecorator(), ColorGreen+"✅"+ColorReset),
+			decor.OnComplete(EmptyDecorator(), ColorGreen+CompletedIcon+ColorReset),
 			decor.OnAbort(EmptyDecorator(), ColorRed+"❌"+ColorReset),
 		),
 		mpb.AppendDecorators(
-			decor.Name(" "+message+" "),
-			decor.Any(func(s decor.Statistics) string {
-				elapsed := s.Total - s.Current
-				minutes := elapsed / 60
-				seconds := elapsed % 60
-				return fmt.Sprintf("%s%02d:%02d%s", ColorCyan, minutes, seconds, ColorReset)
-			}),
+			// 时间前置，加括号和颜色
+			decor.Name(ColorCyan+"("+ColorReset),
+			decor.Elapsed(decor.ET_STYLE_MMSS),
+			decor.Name(ColorCyan+")"+ColorReset+" "+message),
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
 	)
 }
 
-// 对齐美化版spinner - 固定风格
-func AddAlignedSpinner(progressBar *mpb.Progress, imageName, destination, timeStr string, maxImageWidth, maxDestWidth int) *mpb.Bar {
+// 对齐美化版spinner - 固定风格，时间前置
+func AddAlignedSpinner(progressBar *mpb.Progress, imageName, destination string, maxImageWidth, maxDestWidth int) *mpb.Bar {
 	// 格式化对齐的消息
 	alignedImage := fmt.Sprintf("%-*s", maxImageWidth, imageName)
 	alignedDest := fmt.Sprintf("%-*s", maxDestWidth, destination)
@@ -79,17 +111,14 @@ func AddAlignedSpinner(progressBar *mpb.Progress, imageName, destination, timeSt
 		1, mpb.BarFillerMiddleware(ModernSpinnerLeft),
 		mpb.BarWidth(2),
 		mpb.PrependDecorators(
-			decor.OnComplete(EmptyDecorator(), ColorGreen+"✅"+ColorReset),
+			decor.OnComplete(EmptyDecorator(), ColorGreen+CompletedIcon+ColorReset),
 			decor.OnAbort(EmptyDecorator(), ColorRed+"❌"+ColorReset),
 		),
 		mpb.AppendDecorators(
-			decor.Name(" "+message+" "),
-			decor.Any(func(s decor.Statistics) string {
-				elapsed := s.Total - s.Current
-				minutes := elapsed / 60
-				seconds := elapsed % 60
-				return fmt.Sprintf("%s%02d:%02d%s", ColorYellow, minutes, seconds, ColorReset)
-			}),
+			// 时间前置，加括号和颜色
+			decor.Name(ColorYellow+"("+ColorReset),
+			decor.Elapsed(decor.ET_STYLE_MMSS),
+			decor.Name(ColorYellow+")"+ColorReset+" "+message),
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
@@ -155,39 +184,4 @@ func AddSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
 	)
-}
-
-// 计算字符串显示宽度（考虑中文字符）
-func stringDisplayWidth(s string) int {
-	// 简单实现：中文字符按2个宽度计算，英文按1个
-	width := 0
-	for _, r := range s {
-		if r > 127 {
-			width += 2
-		} else {
-			width += 1
-		}
-	}
-	return width
-}
-
-// 计算多个字符串的最大显示宽度
-func calculateMaxWidth(strings []string) int {
-	maxWidth := 0
-	for _, s := range strings {
-		width := stringDisplayWidth(s)
-		if width > maxWidth {
-			maxWidth = width
-		}
-	}
-	return maxWidth
-}
-
-// 填充字符串到指定宽度（考虑中文字符）
-func padString(s string, width int) string {
-	currentWidth := stringDisplayWidth(s)
-	if currentWidth >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-currentWidth)
 }

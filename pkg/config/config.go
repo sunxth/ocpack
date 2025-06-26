@@ -293,16 +293,16 @@ func ValidateConfig(config *ClusterConfig) error {
 
 	// 验证Registry节点配置
 	if config.Registry.IP == "" {
-		return fmt.Errorf("Registry节点IP不能为空")
+		return fmt.Errorf("registry节点IP不能为空")
 	}
 	if config.Registry.Username == "" {
-		return fmt.Errorf("Registry节点用户名不能为空")
+		return fmt.Errorf("registry节点用户名不能为空")
 	}
 	if config.Registry.SSHKeyPath == "" && config.Registry.Password == "" {
-		return fmt.Errorf("Registry节点必须提供SSH密钥或密码")
+		return fmt.Errorf("registry节点必须提供SSH密钥或密码")
 	}
 	if config.Registry.StoragePath == "" {
-		return fmt.Errorf("Registry节点存储路径不能为空")
+		return fmt.Errorf("registry节点存储路径不能为空")
 	}
 
 	// 验证集群节点配置
@@ -312,25 +312,25 @@ func ValidateConfig(config *ClusterConfig) error {
 
 	for i, cp := range config.Cluster.ControlPlane {
 		if cp.Name == "" {
-			return fmt.Errorf("Control Plane节点[%d]名称不能为空", i)
+			return fmt.Errorf("control Plane节点[%d]名称不能为空", i)
 		}
 		if cp.IP == "" {
-			return fmt.Errorf("Control Plane节点[%d] %s 的IP不能为空", i, cp.Name)
+			return fmt.Errorf("control Plane节点[%d] %s 的IP不能为空", i, cp.Name)
 		}
 		if cp.MAC == "" {
-			return fmt.Errorf("Control Plane节点[%d] %s 的MAC地址不能为空", i, cp.Name)
+			return fmt.Errorf("control Plane节点[%d] %s 的MAC地址不能为空", i, cp.Name)
 		}
 	}
 
 	for i, worker := range config.Cluster.Worker {
 		if worker.Name == "" {
-			return fmt.Errorf("Worker节点[%d]名称不能为空", i)
+			return fmt.Errorf("worker节点[%d]名称不能为空", i)
 		}
 		if worker.IP == "" {
-			return fmt.Errorf("Worker节点[%d] %s 的IP不能为空", i, worker.Name)
+			return fmt.Errorf("worker节点[%d] %s 的IP不能为空", i, worker.Name)
 		}
 		if worker.MAC == "" {
-			return fmt.Errorf("Worker节点[%d] %s 的MAC地址不能为空", i, worker.Name)
+			return fmt.Errorf("worker节点[%d] %s 的MAC地址不能为空", i, worker.Name)
 		}
 	}
 
@@ -374,30 +374,30 @@ func ValidateBastionConfig(config *ClusterConfig) error {
 
 	// 验证Registry节点IP（Bastion需要配置Registry的DNS解析）
 	if config.Registry.IP == "" {
-		return fmt.Errorf("Registry节点IP不能为空（Bastion需要配置Registry的DNS解析）")
+		return fmt.Errorf("registry节点IP不能为空（Bastion需要配置Registry的DNS解析）")
 	}
 
 	// 验证集群节点配置（Bastion 需要这些信息来配置 DNS 和 HAProxy）
 	if len(config.Cluster.ControlPlane) == 0 {
-		return fmt.Errorf("至少需要配置一个Control Plane节点")
+		return fmt.Errorf("至少需要配置一个control Plane节点")
 	}
 
 	for i, cp := range config.Cluster.ControlPlane {
 		if cp.Name == "" {
-			return fmt.Errorf("Control Plane节点[%d]名称不能为空", i)
+			return fmt.Errorf("control Plane节点[%d]名称不能为空", i)
 		}
 		if cp.IP == "" {
-			return fmt.Errorf("Control Plane节点[%d] %s 的IP不能为空", i, cp.Name)
+			return fmt.Errorf("control Plane节点[%d] %s 的IP不能为空", i, cp.Name)
 		}
 		// MAC 地址对于 Bastion 部署不是必需的
 	}
 
 	for i, worker := range config.Cluster.Worker {
 		if worker.Name == "" {
-			return fmt.Errorf("Worker节点[%d]名称不能为空", i)
+			return fmt.Errorf("worker节点[%d]名称不能为空", i)
 		}
 		if worker.IP == "" {
-			return fmt.Errorf("Worker节点[%d] %s 的IP不能为空", i, worker.Name)
+			return fmt.Errorf("worker节点[%d] %s 的IP不能为空", i, worker.Name)
 		}
 		// MAC 地址对于 Bastion 部署不是必需的
 	}
@@ -428,16 +428,16 @@ func ValidateRegistryConfig(config *ClusterConfig) error {
 
 	// 验证Registry节点配置
 	if config.Registry.IP == "" {
-		return fmt.Errorf("Registry节点IP不能为空")
+		return fmt.Errorf("registry节点IP不能为空")
 	}
 	if config.Registry.Username == "" {
-		return fmt.Errorf("Registry节点用户名不能为空")
+		return fmt.Errorf("registry节点用户名不能为空")
 	}
 	if config.Registry.SSHKeyPath == "" && config.Registry.Password == "" {
-		return fmt.Errorf("Registry节点必须提供SSH密钥或密码")
+		return fmt.Errorf("registry节点必须提供SSH密钥或密码")
 	}
 	if config.Registry.StoragePath == "" {
-		return fmt.Errorf("Registry节点存储路径不能为空")
+		return fmt.Errorf("registry节点存储路径不能为空")
 	}
 
 	return nil

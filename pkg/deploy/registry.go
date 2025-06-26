@@ -48,13 +48,13 @@ func DeployRegistry(cfg *config.ClusterConfig, configFilePath string) error {
 	// 创建 Ansible 执行器
 	executor, err := NewAnsibleExecutor(cfg, configFilePath)
 	if err != nil {
-		return fmt.Errorf("创建 Ansible 执行器失败: %w", err)
+		return fmt.Errorf("创建ansible执行器失败: %w", err)
 	}
 	defer executor.Cleanup()
 
 	// 执行 Registry playbook
 	if err := executor.RunRegistryPlaybook(); err != nil {
-		return fmt.Errorf("Registry 节点部署失败: %w", err)
+		return fmt.Errorf("registry节点部署失败: %w", err)
 	}
 
 	printSuccessMessage(cfg) // 优化: 调用统一的成功消息函数

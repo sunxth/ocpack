@@ -432,60 +432,8 @@ func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progre
 	}
 }
 
-// 彩色增强版spinner - 方案一（已优化）
-func newColorfulSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress) *mpb.Bar {
-	imageName := path.Base(img.Origin)
-	var destination string
-	if strings.Contains(img.Destination, localStorage) {
-		destination = "cache"
-	} else {
-		destination = hostNamespace(img.Destination)
-		if len(destination) > 25 {
-			destination = destination[:22] + "..."
-		}
-	}
-
-	imageText := imageName + " → " + destination
-
-	return spinners.AddColorfulSpinner(p, imageText)
-}
-
-// 对齐美化版spinner - 方案二（已优化）
-func newAlignedSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress, maxImageWidth, maxDestWidth int) *mpb.Bar {
-	imageName := path.Base(img.Origin)
-	var destination string
-	if strings.Contains(img.Destination, localStorage) {
-		destination = "cache"
-	} else {
-		destination = hostNamespace(img.Destination)
-		if len(destination) > 25 {
-			destination = destination[:22] + "..."
-		}
-	}
-
-	// 计算对齐宽度时限制最大宽度
-	if len(imageName) > maxImageWidth {
-		maxImageWidth = len(imageName)
-	}
-	if len(destination) > maxDestWidth {
-		maxDestWidth = len(destination)
-	}
-
-	return spinners.AddAlignedSpinner(p, imageName, destination, "", maxImageWidth, maxDestWidth)
-}
-
 func newOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
 	// 使用彩色增强的整体进度条
-	return spinners.AddColorfulOverallProgress(p, total)
-}
-
-// 彩色增强版整体进度条 - 方案一（已优化）
-func newColorfulOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
-	return spinners.AddColorfulOverallProgress(p, total)
-}
-
-// 对齐美化版整体进度条 - 方案二（保持兼容）
-func newAlignedOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
 	return spinners.AddColorfulOverallProgress(p, total)
 }
 

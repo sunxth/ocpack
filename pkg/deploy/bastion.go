@@ -29,7 +29,7 @@ func NewBastionDeployer(cfg *config.ClusterConfig, downloadDir string) *BastionD
 }
 
 // Deploy 执行 Bastion 节点部署
-// 优化：重构为职责更单一的“编排器”函数
+// 优化：重构为职责更单一的"编排器"函数
 func (d *BastionDeployer) Deploy(configFilePath string) error {
 	fmt.Printf("▶️  开始部署 Bastion 节点 (%s)...\n", d.config.Bastion.IP)
 
@@ -37,14 +37,14 @@ func (d *BastionDeployer) Deploy(configFilePath string) error {
 	fmt.Println("➡️  正在初始化部署环境...")
 	executor, err := NewAnsibleExecutor(d.config, configFilePath)
 	if err != nil {
-		return fmt.Errorf("创建 Ansible 执行器失败: %w", err)
+		return fmt.Errorf("创建ansible执行器失败: %w", err)
 	}
 	defer executor.Cleanup()
 
 	// 2. 执行 Bastion playbook
 	fmt.Println("🚀 正在执行 Bastion 部署 playbook (此过程可能需要几分钟)...")
 	if err := executor.RunBastionPlaybook(); err != nil {
-		return fmt.Errorf("Bastion 节点部署失败: %w", err)
+		return fmt.Errorf("bastion节点部署失败: %w", err)
 	}
 
 	// 3. 打印成功信息

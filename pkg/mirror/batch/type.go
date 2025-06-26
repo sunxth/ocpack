@@ -10,7 +10,6 @@ type ProgressStruct struct {
 }
 
 type StringMap map[string]string
-type onlyKeyMap map[string]struct{}
 
 type mirrorErrorSchema struct {
 	image     v2alpha1.CopyImageSchema
@@ -21,9 +20,4 @@ type mirrorErrorSchema struct {
 
 func (e mirrorErrorSchema) Error() string {
 	return e.err.Error()
-}
-
-func (s onlyKeyMap) Has(key string) bool {
-	_, ok := s[key]
-	return ok
 }
