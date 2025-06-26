@@ -37,7 +37,7 @@ func BarFillerClearOnAbort() mpb.BarOption {
 	})
 }
 
-// 极简风格的spinner - 方案三实现
+// 极简风格的spinner - 只显示完成状态，没有进度信息
 func AddMinimalSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
 		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
@@ -48,6 +48,65 @@ func AddMinimalSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 		),
 		mpb.AppendDecorators(
 			decor.Name(" "+message), // 去掉括号和时间，只显示消息
+		),
+		mpb.BarFillerClearOnComplete(),
+		BarFillerClearOnAbort(),
+	)
+}
+
+// 增强版spinner - 显示下载进度和速度（改进版）
+func AddProgressSpinner(progressBar *mpb.Progress, message string, totalSize int64) *mpb.Bar {
+	if totalSize > 0 {
+		// 如果知道总大小，显示进度条
+		return progressBar.AddBar(totalSize,
+			mpb.PrependDecorators(
+				decor.OnComplete(EmptyDecorator(), "✓"),
+				decor.OnAbort(EmptyDecorator(), "✗"),
+			),
+			mpb.AppendDecorators(
+				decor.Name(" "+message+" "),
+				decor.CountersKibiByte("% .1f/% .1f"),
+				decor.Name(" "),
+				decor.AverageSpeed(decor.SizeB1024(0), "% .1f"),
+				decor.Name(" "),
+				decor.AverageETA(decor.ET_STYLE_GO),
+			),
+		)
+	} else {
+		// 如果不知道总大小，显示增强的spinner
+		return progressBar.AddSpinner(
+			1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
+			mpb.BarWidth(2),
+			mpb.PrependDecorators(
+				decor.OnComplete(EmptyDecorator(), "✓"),
+				decor.OnAbort(EmptyDecorator(), "✗"),
+			),
+			mpb.AppendDecorators(
+				decor.Name(" "+message+" "),
+				decor.AverageSpeed(decor.SizeB1024(0), "% .1f"),
+				decor.Name(" "),
+				decor.Elapsed(decor.ET_STYLE_GO),
+			),
+			mpb.BarFillerClearOnComplete(),
+			BarFillerClearOnAbort(),
+		)
+	}
+}
+
+// 紧凑版spinner - 显示关键进度信息但保持简洁
+func AddCompactSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
+	return progressBar.AddSpinner(
+		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
+		mpb.BarWidth(2),
+		mpb.PrependDecorators(
+			decor.OnComplete(EmptyDecorator(), "✓"),
+			decor.OnAbort(EmptyDecorator(), "✗"),
+		),
+		mpb.AppendDecorators(
+			decor.Name(" "+message+" "),
+			decor.AverageSpeed(decor.SizeB1024(0), "%.0f"), // 显示速度，但不显示单位
+			decor.Name(" "),
+			decor.Elapsed(decor.ET_STYLE_MMSS), // 显示经过时间，MM:SS格式
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
@@ -70,6 +129,25 @@ func AddSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
+	)
+}
+
+// 增强的整体进度条 - 显示速度和ETA
+func AddEnhancedOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
+	return progressBar.AddBar(int64(total),
+		mpb.PrependDecorators(
+			decor.Name("📦 "),
+			decor.CountersNoUnit("%d/%d"),
+		),
+		mpb.AppendDecorators(
+			decor.Name(" "),
+			decor.Percentage(),
+			decor.Name(" "),
+			decor.AverageSpeed(decor.SizeB1024(0), "%.0f img/min"),
+			decor.Name(" "),
+			decor.AverageETA(decor.ET_STYLE_MMSS),
+		),
+		mpb.BarPriority(total+1),
 	)
 }
 
