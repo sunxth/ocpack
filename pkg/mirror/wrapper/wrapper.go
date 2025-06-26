@@ -50,7 +50,7 @@ func NewMirrorWrapper(logLevel string) (*MirrorWrapper, error) {
 
 // MirrorToDisk 执行镜像到磁盘操作
 func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 Starting mirror-to-disk operation...")
+	w.log.Info("🔄 Mirroring to disk...")
 
 	// 定义执行函数
 	executeFunc := func() error {
@@ -68,7 +68,7 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
-		w.log.Info("📋 Using configuration generator (based on config.toml)")
+		w.log.Info("📋 Loading config...")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("failed to generate mirror config: %v", err)
@@ -113,8 +113,7 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 		cmd.SetArgs(args)
 
 		w.log.Debug("Command arguments: %v", args)
-		w.log.Info("💾 Using cache: %s", cacheDir)
-		w.log.Info("📁 Mirror destination: %s", destination)
+		w.log.Info("💾 Cache: %s", cacheDir)
 
 		err = cmd.Execute()
 		if err != nil {
@@ -139,7 +138,7 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 
 // DiskToMirror 执行磁盘到仓库操作
 func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 Starting disk-to-mirror operation...")
+	w.log.Info("🔄 Disk to mirror...")
 
 	// 定义执行函数
 	executeFunc := func() error {
@@ -156,7 +155,7 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
-		w.log.Info("📋 Using configuration generator (based on config.toml)")
+		w.log.Info("📋 Loading config...")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("failed to generate mirror config: %v", err)
@@ -228,7 +227,7 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 
 // MirrorDirect 执行直接镜像操作
 func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, destination string, opts *MirrorOptions) error {
-	w.log.Info("🔄 Starting mirror-to-mirror operation...")
+	w.log.Info("🔄 Mirror to mirror...")
 
 	// 定义执行函数
 	executeFunc := func() error {

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/vbauerster/mpb/v8"
-	"github.com/vbauerster/mpb/v8/decor"
 
 	"ocpack/pkg/mirror/api/v2alpha1"
 	"ocpack/pkg/mirror/emoji"
@@ -71,8 +70,7 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 
 	total := len(collectorSchema.AllImages)
 
-	o.Log.Info(emoji.Rocket + " Start " + mirrorMsg + " the images...")
-	o.Log.Info(emoji.Pushpin+" images to %s %d ", opts.Function, total)
+	o.Log.Info("🚀 "+mirrorMsg+" %d images...", total)
 
 	p := mpb.New(mpb.PopCompletedMode(), mpb.ContainerOptional(mpb.WithOutput(io.Discard), !opts.Global.IsTerminal))
 	results := make(chan GoroutineResult, total)
@@ -254,8 +252,6 @@ func hostNamespace(input string) string {
 }
 
 func logResults(log clog.PluggableLoggerInterface, copyMode string, copiedImages, collectorSchema *v2alpha1.CollectorSchema) {
-	log.Info("=== Results ===")
-
 	var copyModeMsg string
 	if copyMode == string(mirror.CopyMode) {
 		copyModeMsg = "mirrored"
@@ -263,10 +259,27 @@ func logResults(log clog.PluggableLoggerInterface, copyMode string, copiedImages
 		copyModeMsg = "deleted"
 	}
 
-	logResult(log, copyModeMsg, "release", copiedImages.TotalReleaseImages, collectorSchema.TotalReleaseImages)
-	logResult(log, copyModeMsg, "operator", copiedImages.TotalOperatorImages, collectorSchema.TotalOperatorImages)
-	logResult(log, copyModeMsg, "additional", copiedImages.TotalAdditionalImages, collectorSchema.TotalAdditionalImages)
-	logResult(log, copyModeMsg, "helm", copiedImages.TotalHelmImages, collectorSchema.TotalHelmImages)
+	total := copiedImages.TotalReleaseImages + copiedImages.TotalOperatorImages + copiedImages.TotalAdditionalImages + copiedImages.TotalHelmImages
+	expected := collectorSchema.TotalReleaseImages + collectorSchema.TotalOperatorImages + collectorSchema.TotalAdditionalImages + collectorSchema.TotalHelmImages
+
+	if total == expected {
+		log.Info("✅ %s %d/%d images successfully", copyModeMsg, total, expected)
+	} else {
+		log.Info("⚠️  %s %d/%d images (some failed)", copyModeMsg, total, expected)
+		// 只在有失败时显示详细分解
+		if copiedImages.TotalReleaseImages != collectorSchema.TotalReleaseImages {
+			logResult(log, copyModeMsg, "release", copiedImages.TotalReleaseImages, collectorSchema.TotalReleaseImages)
+		}
+		if copiedImages.TotalOperatorImages != collectorSchema.TotalOperatorImages {
+			logResult(log, copyModeMsg, "operator", copiedImages.TotalOperatorImages, collectorSchema.TotalOperatorImages)
+		}
+		if copiedImages.TotalAdditionalImages != collectorSchema.TotalAdditionalImages {
+			logResult(log, copyModeMsg, "additional", copiedImages.TotalAdditionalImages, collectorSchema.TotalAdditionalImages)
+		}
+		if copiedImages.TotalHelmImages != collectorSchema.TotalHelmImages {
+			logResult(log, copyModeMsg, "helm", copiedImages.TotalHelmImages, collectorSchema.TotalHelmImages)
+		}
+	}
 }
 
 func logResult(log clog.PluggableLoggerInterface, copyMode, imageType string, copied, total int) {
@@ -315,29 +328,26 @@ func logImageError(log clog.PluggableLoggerInterface, image *v2alpha1.CopyImageS
 }
 
 func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress) *mpb.Bar {
-	imageText := " " + path.Base(img.Origin) + " "
+	// 极简显示：只显示镜像名称和目标
+	imageName := path.Base(img.Origin)
+	var destination string
 	if strings.Contains(img.Destination, localStorage) {
-		imageText += emoji.RightArrow + "  cache "
+		destination = "cache"
 	} else {
-		imageText += emoji.RightArrow + "  " + hostNamespace(img.Destination) + " "
+		destination = hostNamespace(img.Destination)
+		// 简化目标显示，只保留关键部分
+		if len(destination) > 30 {
+			destination = destination[:27] + "..."
+		}
 	}
 
-	return spinners.AddSpinner(p, imageText)
+	imageText := imageName + " → " + destination
+
+	return spinners.AddMinimalSpinner(p, imageText)
 }
 
 func newOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
-	return p.AddBar(int64(total),
-		mpb.PrependDecorators(
-			decor.CountersNoUnit("%d / %d"),
-			decor.Name(" ("),
-			decor.Elapsed(decor.ET_STYLE_GO),
-			decor.Name(")"),
-		),
-		mpb.AppendDecorators(
-			decor.Percentage(),
-		),
-		mpb.BarPriority(total+1),
-	)
+	return spinners.AddMinimalOverallProgress(p, total)
 }
 
 func runOverallProgress(overallProgress *mpb.Bar, cancelCtx context.Context, progressCh chan int) {
