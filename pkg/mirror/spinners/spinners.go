@@ -1,7 +1,9 @@
 package spinners
 
 import (
+	"fmt"
 	"io"
+	"strings"
 
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
@@ -9,14 +11,20 @@ import (
 	"ocpack/pkg/mirror/emoji"
 )
 
-// MinimalSpinnerStyle - 极简spinner样式，只使用点和短横线
-func MinimalSpinnerLeft(original mpb.BarFiller) mpb.BarFiller {
-	return mpb.SpinnerStyle("⠙", "⠸", "⠼", "⠦", "⠇", "⠋", " ").PositionLeft().Build()
-}
+// ANSI 颜色代码
+const (
+	ColorReset  = "\033[0m"
+	ColorBlue   = "\033[34m" // 进行中
+	ColorGreen  = "\033[32m" // 成功
+	ColorYellow = "\033[33m" // 警告
+	ColorRed    = "\033[31m" // 错误
+	ColorCyan   = "\033[36m" // 信息
+	ColorPurple = "\033[35m" // 紫色
+)
 
-// 传统的spinner样式（保持向后兼容）
-func PositionSpinnerLeft(original mpb.BarFiller) mpb.BarFiller {
-	return mpb.SpinnerStyle("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " ").PositionLeft().Build()
+// 现代化spinner样式 - 使用更流畅的动画
+func ModernSpinnerLeft(original mpb.BarFiller) mpb.BarFiller {
+	return mpb.SpinnerStyle("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", " ").PositionLeft().Build()
 }
 
 func EmptyDecorator() decor.Decorator {
@@ -37,104 +45,103 @@ func BarFillerClearOnAbort() mpb.BarOption {
 	})
 }
 
-// 极简风格的spinner - 只显示完成状态，没有进度信息
-func AddMinimalSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
+// 彩色增强版spinner - 固定风格
+func AddColorfulSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
-		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
-		mpb.BarWidth(2), // 更窄的宽度
+		1, mpb.BarFillerMiddleware(ModernSpinnerLeft),
+		mpb.BarWidth(2),
 		mpb.PrependDecorators(
-			decor.OnComplete(EmptyDecorator(), "✓"), // 简洁的完成标记
-			decor.OnAbort(EmptyDecorator(), "✗"),    // 简洁的失败标记
+			decor.OnComplete(EmptyDecorator(), ColorGreen+"✅"+ColorReset),
+			decor.OnAbort(EmptyDecorator(), ColorRed+"❌"+ColorReset),
 		),
 		mpb.AppendDecorators(
-			decor.Name(" "+message), // 去掉括号和时间，只显示消息
+			decor.Name(" "+message+" "),
+			decor.Any(func(s decor.Statistics) string {
+				elapsed := s.Total - s.Current
+				minutes := elapsed / 60
+				seconds := elapsed % 60
+				return fmt.Sprintf("%s%02d:%02d%s", ColorCyan, minutes, seconds, ColorReset)
+			}),
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
 	)
 }
 
-// 增强版spinner - 显示下载进度和速度（改进版）
-func AddProgressSpinner(progressBar *mpb.Progress, message string, totalSize int64) *mpb.Bar {
-	if totalSize > 0 {
-		// 如果知道总大小，显示进度条
-		return progressBar.AddBar(totalSize,
-			mpb.PrependDecorators(
-				decor.OnComplete(EmptyDecorator(), "✓"),
-				decor.OnAbort(EmptyDecorator(), "✗"),
-			),
-			mpb.AppendDecorators(
-				decor.Name(" "+message+" "),
-				decor.CountersKibiByte("% .1f/% .1f"),
-				decor.Name(" "),
-				decor.AverageSpeed(decor.SizeB1024(0), "% .1f"),
-				decor.Name(" "),
-				decor.AverageETA(decor.ET_STYLE_GO),
-			),
-		)
-	} else {
-		// 如果不知道总大小，显示增强的spinner
-		return progressBar.AddSpinner(
-			1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
-			mpb.BarWidth(2),
-			mpb.PrependDecorators(
-				decor.OnComplete(EmptyDecorator(), "✓"),
-				decor.OnAbort(EmptyDecorator(), "✗"),
-			),
-			mpb.AppendDecorators(
-				decor.Name(" "+message+" "),
-				decor.AverageSpeed(decor.SizeB1024(0), "% .1f"),
-				decor.Name(" "),
-				decor.Elapsed(decor.ET_STYLE_GO),
-			),
-			mpb.BarFillerClearOnComplete(),
-			BarFillerClearOnAbort(),
-		)
-	}
-}
+// 对齐美化版spinner - 固定风格
+func AddAlignedSpinner(progressBar *mpb.Progress, imageName, destination, timeStr string, maxImageWidth, maxDestWidth int) *mpb.Bar {
+	// 格式化对齐的消息
+	alignedImage := fmt.Sprintf("%-*s", maxImageWidth, imageName)
+	alignedDest := fmt.Sprintf("%-*s", maxDestWidth, destination)
+	message := fmt.Sprintf("%s%s%s → %s%s%s", ColorBlue, alignedImage, ColorReset, ColorCyan, alignedDest, ColorReset)
 
-// 简洁版spinner - 只显示经过时间，去掉不准确的速度
-func AddCleanSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
-		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
+		1, mpb.BarFillerMiddleware(ModernSpinnerLeft),
 		mpb.BarWidth(2),
 		mpb.PrependDecorators(
-			decor.OnComplete(EmptyDecorator(), "✓"),
-			decor.OnAbort(EmptyDecorator(), "✗"),
+			decor.OnComplete(EmptyDecorator(), ColorGreen+"✅"+ColorReset),
+			decor.OnAbort(EmptyDecorator(), ColorRed+"❌"+ColorReset),
 		),
 		mpb.AppendDecorators(
 			decor.Name(" "+message+" "),
-			decor.Elapsed(decor.ET_STYLE_MMSS), // 只显示经过时间，MM:SS格式
+			decor.Any(func(s decor.Statistics) string {
+				elapsed := s.Total - s.Current
+				minutes := elapsed / 60
+				seconds := elapsed % 60
+				return fmt.Sprintf("%s%02d:%02d%s", ColorYellow, minutes, seconds, ColorReset)
+			}),
 		),
 		mpb.BarFillerClearOnComplete(),
 		BarFillerClearOnAbort(),
 	)
 }
 
-// 紧凑版spinner - 显示关键进度信息但保持简洁
-func AddCompactSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
-	return progressBar.AddSpinner(
-		1, mpb.BarFillerMiddleware(MinimalSpinnerLeft),
-		mpb.BarWidth(2),
+// 彩色增强版整体进度条 - 固定风格
+func AddColorfulOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
+	return progressBar.AddBar(int64(total),
 		mpb.PrependDecorators(
-			decor.OnComplete(EmptyDecorator(), "✓"),
-			decor.OnAbort(EmptyDecorator(), "✗"),
+			decor.Name(ColorPurple+"📦 "+ColorReset),
+			decor.Any(func(s decor.Statistics) string {
+				return fmt.Sprintf("%s%d/%d%s", ColorCyan, s.Current, total, ColorReset)
+			}),
 		),
 		mpb.AppendDecorators(
-			decor.Name(" "+message+" "),
-			decor.AverageSpeed(decor.SizeB1024(0), "%.0f"), // 显示速度，但不显示单位
 			decor.Name(" "),
-			decor.Elapsed(decor.ET_STYLE_MMSS), // 显示经过时间，MM:SS格式
+			decor.Any(func(s decor.Statistics) string {
+				percentage := int(100 * float64(s.Current) / float64(s.Total))
+				var color string
+				var icon string
+				switch {
+				case percentage >= 95:
+					color = ColorGreen
+					icon = "🎉"
+				case percentage >= 80:
+					color = ColorGreen
+					icon = "⚡"
+				case percentage >= 60:
+					color = ColorCyan
+					icon = "🔥"
+				case percentage >= 40:
+					color = ColorYellow
+					icon = "📈"
+				case percentage >= 20:
+					color = ColorYellow
+					icon = "⏳"
+				default:
+					color = ColorBlue
+					icon = "🔄"
+				}
+				return fmt.Sprintf("%s%s %d%%%s", color, icon, percentage, ColorReset)
+			}),
 		),
-		mpb.BarFillerClearOnComplete(),
-		BarFillerClearOnAbort(),
+		mpb.BarPriority(total+1),
 	)
 }
 
 // 传统的spinner（保持向后兼容）
 func AddSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	return progressBar.AddSpinner(
-		1, mpb.BarFillerMiddleware(PositionSpinnerLeft),
+		1, mpb.BarFillerMiddleware(ModernSpinnerLeft),
 		mpb.BarWidth(3),
 		mpb.PrependDecorators(
 			decor.OnComplete(EmptyDecorator(), emoji.SpinnerCheckMark),
@@ -150,51 +157,37 @@ func AddSpinner(progressBar *mpb.Progress, message string) *mpb.Bar {
 	)
 }
 
-// 简洁的整体进度条 - 只显示计数和百分比，去掉不准确的速度和ETA
-func AddCleanOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
-	return progressBar.AddBar(int64(total),
-		mpb.PrependDecorators(
-			decor.Name("📦 "),
-			decor.CountersNoUnit("%d/%d"),
-		),
-		mpb.AppendDecorators(
-			decor.Name(" "),
-			decor.Percentage(),
-		),
-		mpb.BarPriority(total+1),
-	)
+// 计算字符串显示宽度（考虑中文字符）
+func stringDisplayWidth(s string) int {
+	// 简单实现：中文字符按2个宽度计算，英文按1个
+	width := 0
+	for _, r := range s {
+		if r > 127 {
+			width += 2
+		} else {
+			width += 1
+		}
+	}
+	return width
 }
 
-// 增强的整体进度条 - 显示速度和ETA
-func AddEnhancedOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
-	return progressBar.AddBar(int64(total),
-		mpb.PrependDecorators(
-			decor.Name("📦 "),
-			decor.CountersNoUnit("%d/%d"),
-		),
-		mpb.AppendDecorators(
-			decor.Name(" "),
-			decor.Percentage(),
-			decor.Name(" "),
-			decor.AverageSpeed(decor.SizeB1024(0), "%.0f img/min"),
-			decor.Name(" "),
-			decor.AverageETA(decor.ET_STYLE_MMSS),
-		),
-		mpb.BarPriority(total+1),
-	)
+// 计算多个字符串的最大显示宽度
+func calculateMaxWidth(strings []string) int {
+	maxWidth := 0
+	for _, s := range strings {
+		width := stringDisplayWidth(s)
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
 }
 
-// 极简的整体进度条
-func AddMinimalOverallProgress(progressBar *mpb.Progress, total int) *mpb.Bar {
-	return progressBar.AddBar(int64(total),
-		mpb.PrependDecorators(
-			decor.Name("📦 "),              // 简单的前缀图标
-			decor.CountersNoUnit("%d/%d"), // 紧凑的计数器
-		),
-		mpb.AppendDecorators(
-			decor.Name(" "),
-			decor.Percentage(), // 只显示百分比
-		),
-		mpb.BarPriority(total+1),
-	)
+// 填充字符串到指定宽度（考虑中文字符）
+func padString(s string, width int) string {
+	currentWidth := stringDisplayWidth(s)
+	if currentWidth >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-currentWidth)
 }

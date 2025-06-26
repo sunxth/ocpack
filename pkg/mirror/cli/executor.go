@@ -1126,7 +1126,7 @@ func (o *ExecutorSchema) RebuildCatalogs(ctx context.Context, operatorImgs v2alp
 				}
 				p := mpb.New(mpb.ContainerOptional(mpb.WithOutput(io.Discard), !o.Opts.Global.IsTerminal))
 				spinner := p.AddSpinner(
-					1, mpb.BarFillerMiddleware(spinners.PositionSpinnerLeft),
+					1, mpb.BarFillerMiddleware(spinners.ModernSpinnerLeft),
 					mpb.BarWidth(3),
 					mpb.PrependDecorators(
 						decor.OnComplete(spinners.EmptyDecorator(), "\x1b[1;92m ✓ \x1b[0m"),

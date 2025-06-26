@@ -80,6 +80,11 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 	cancelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// 错误统计
+	var criticalErrors int
+	var skipCount int
+	const maxCriticalErrors = 10 // 最大允许的关键错误数量
+
 	go func() {
 		defer close(results)
 		defer close(semaphore)
@@ -124,14 +129,16 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 
 				var err error
 				var triggered bool
-			loop:
-				for {
+
+				// 添加重试机制
+				maxRetries := 3
+				for attempt := 0; attempt < maxRetries; attempt++ {
 					select {
 					case <-cancelCtx.Done():
 						spinner.Abort(false)
-						break loop
+						return
 					default:
-						if !triggered {
+						if !triggered || attempt > 0 {
 							triggered = true
 							timeoutCtx, _ := opts.Global.CommandTimeoutContext()
 
@@ -142,24 +149,36 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 
 							err = o.Mirror.Run(timeoutCtx, img.Source, img.Destination, mirror.Mode(opts.Function), &options) //nolint:contextcheck
 
-							switch {
-							case err == nil:
+							if err == nil {
 								spinner.Increment()
-							case img.Type.IsOperator():
-								operators := collectorSchema.CopyImageSchemaMap.OperatorsByImage[img.Origin]
-								bundles := collectorSchema.CopyImageSchemaMap.BundlesByImage[img.Origin]
-								result.err = &mirrorErrorSchema{image: img, err: err, operators: operators, bundles: bundles}
-								spinner.Abort(false)
-							case img.Type.IsRelease() || img.Type.IsAdditionalImage() || img.Type.IsHelmImage():
-								result.err = &mirrorErrorSchema{image: img, err: err}
-								spinner.Abort(false)
+								results <- result
+								return
 							}
-							results <- result
-							break loop
-						}
 
+							// 如果是最后一次尝试或者是不可重试的错误
+							if attempt == maxRetries-1 || isNonRetryableError(err) {
+								break
+							}
+
+							// 短暂延迟后重试
+							time.Sleep(time.Duration(attempt+1) * time.Second)
+						}
 					}
 				}
+
+				// 处理最终错误
+				switch {
+				case img.Type.IsOperator():
+					operators := collectorSchema.CopyImageSchemaMap.OperatorsByImage[img.Origin]
+					bundles := collectorSchema.CopyImageSchemaMap.BundlesByImage[img.Origin]
+					result.err = &mirrorErrorSchema{image: img, err: err, operators: operators, bundles: bundles}
+					spinner.Abort(false)
+				case img.Type.IsRelease() || img.Type.IsAdditionalImage() || img.Type.IsHelmImage():
+					result.err = &mirrorErrorSchema{image: img, err: err}
+					spinner.Abort(false)
+				}
+				results <- result
+
 			}(cancelCtx, semaphore, results, sp)
 		}
 		wg.Wait()
@@ -180,11 +199,22 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 		} else {
 			m.Lock()
 			errArray = append(errArray, *err)
+
+			// 统计错误类型
+			if isCriticalError(err.err) {
+				criticalErrors++
+			} else {
+				skipCount++
+			}
 			m.Unlock()
 
 			logImageError(o.Log, &res.img, &opts)
-			// 改进：不再因为单个 release 镜像失败就终止整个流程
-			// 让所有镜像都有机会下载，最后再统一处理错误
+
+			// 智能错误处理：如果关键错误太多，考虑提前终止
+			if criticalErrors > maxCriticalErrors {
+				o.Log.Warn("⚠️  检测到过多关键错误 (%d)，建议检查网络连接和配置", criticalErrors)
+				// 不直接取消，让用户决定是否继续
+			}
 		}
 
 		completed++
@@ -194,40 +224,79 @@ func (o *ChannelConcurrentBatch) Worker(ctx context.Context, collectorSchema v2a
 
 	p.Wait()
 
+	// 增强的结果统计
+	duration := time.Since(startTime)
+	successCount := len(copiedImages.AllImages)
+	failureCount := len(errArray)
+
 	logResults(o.Log, opts.Function, &copiedImages, &collectorSchema)
+
+	// 显示详细的执行摘要
+	o.Log.Info("📊 执行摘要: 总计 %d 个镜像, 成功 %d, 失败 %d, 跳过 %d, 用时 %v",
+		total, successCount, failureCount, skipCount, duration.Round(time.Second))
+
+	if successCount > 0 {
+		avgTime := duration / time.Duration(successCount)
+		o.Log.Info("⚡ 平均每个镜像用时: %v", avgTime.Round(time.Millisecond))
+	}
 
 	if len(errArray) > 0 {
 		// 计算成功率
-		totalImages := len(collectorSchema.AllImages)
-		successImages := len(copiedImages.AllImages)
-		successRate := float64(successImages) / float64(totalImages) * 100
+		successRate := float64(successCount) / float64(total) * 100
 
-		batchErr := &BatchError{
-			releaseCountDiff:       collectorSchema.TotalReleaseImages - copiedImages.TotalReleaseImages,
-			operatorCountDiff:      collectorSchema.TotalOperatorImages - copiedImages.TotalOperatorImages,
-			additionalImgCountDiff: collectorSchema.TotalAdditionalImages - copiedImages.TotalAdditionalImages,
-			helmCountDiff:          collectorSchema.TotalHelmImages - copiedImages.TotalHelmImages,
-		}
-
-		filename, err := saveErrors(o.Log, o.LogsDir, errArray)
-		if err != nil {
-			batchErr.source = fmt.Errorf(errMsgHeader+" - unable to log these errors in %s/%s: %w", workerPrefix, o.LogsDir, filename, err)
+		// 根据成功率给出不同的提示
+		if successRate >= 95.0 {
+			o.Log.Info("✅ 成功率: %.1f%% - 表现优秀!", successRate)
+		} else if successRate >= 85.0 {
+			o.Log.Warn("⚠️  成功率: %.1f%% - 有少量错误，建议查看日志", successRate)
+		} else if successRate >= 70.0 {
+			o.Log.Warn("⚠️  成功率: %.1f%% - 存在较多错误，请检查配置", successRate)
 		} else {
-			batchErr.source = fmt.Errorf(errMsg, workerPrefix, o.LogsDir, filename)
+			o.Log.Error("❌ 成功率: %.1f%% - 存在严重问题，请检查网络和配置", successRate)
 		}
 
-		// 改进：如果成功率足够高(比如 >= 80%)，则将错误视为警告而不是致命错误
-		if successRate >= 80.0 {
-			o.Log.Warn("⚠️  镜像同步部分失败，但成功率达到 %.1f%% (%d/%d)，继续执行", successRate, successImages, totalImages)
-			o.Log.Warn("   失败的镜像列表请查看: %s/%s", o.LogsDir, filename)
-			return copiedImages, nil // 返回 nil 而不是错误
+		// 分类错误原因
+		networkErrors := 0
+		authErrors := 0
+		otherErrors := 0
+
+		for _, err := range errArray {
+			if isNetworkError(err.err) {
+				networkErrors++
+			} else if isAuthError(err.err) {
+				authErrors++
+			} else {
+				otherErrors++
+			}
 		}
 
-		// 如果成功率太低，才返回错误
-		o.Log.Error("❌ 镜像同步成功率过低: %.1f%% (%d/%d)，建议检查网络或重试", successRate, successImages, totalImages)
-		return copiedImages, batchErr
+		if networkErrors > 0 {
+			o.Log.Error("🌐 网络相关错误: %d 个", networkErrors)
+		}
+		if authErrors > 0 {
+			o.Log.Error("🔐 认证相关错误: %d 个", authErrors)
+		}
+		if otherErrors > 0 {
+			o.Log.Error("❓ 其他错误: %d 个", otherErrors)
+		}
+
+		// 错误写入文件
+		if errorsFilePath := o.writeErrorsToFile(errArray); errorsFilePath != "" {
+			o.Log.Info(errMsgHeader+"，详细信息已保存到: %s", emoji.SpinnerCrossMark, errorsFilePath)
+			o.Log.Info("💡 建议操作:")
+			o.Log.Info("   • 检查网络连接和DNS配置")
+			o.Log.Info("   • 验证镜像仓库的访问权限")
+			o.Log.Info("   • 考虑重新运行以重试失败的镜像")
+			o.Log.Info("   • 或从镜像集配置中移除有问题的镜像")
+		} else {
+			o.Log.Error(errMsg, emoji.SpinnerCrossMark, o.LogsDir, "ERRORS")
+		}
+
+		// 返回错误，但包含成功的镜像信息
+		return copiedImages, fmt.Errorf("镜像复制过程中出现 %d 个错误，成功率: %.1f%%", len(errArray), successRate)
 	}
-	o.Log.Debug("concurrent channel worker time     : %v", time.Since(startTime))
+
+	o.Log.Info("🎉 所有镜像复制完成！用时 %v", duration.Round(time.Second))
 	return copiedImages, nil
 }
 
@@ -328,7 +397,7 @@ func logImageError(log clog.PluggableLoggerInterface, image *v2alpha1.CopyImageS
 }
 
 func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress) *mpb.Bar {
-	// 显示镜像名称和目标，只显示经过时间
+	// 显示镜像名称和目标，使用彩色增强UI风格
 	imageName := path.Base(img.Origin)
 	var destination string
 	if strings.Contains(img.Destination, localStorage) {
@@ -343,11 +412,81 @@ func newSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progre
 
 	imageText := imageName + " → " + destination
 
-	return spinners.AddCleanSpinner(p, imageText)
+	// 根据镜像类型使用不同的彩色显示（移除emoji图标）
+	switch img.Type {
+	case v2alpha1.TypeOCPRelease, v2alpha1.TypeOCPReleaseContent:
+		// Release镜像使用蓝色显示
+		return spinners.AddColorfulSpinner(p, spinners.ColorBlue+imageText+spinners.ColorReset)
+
+	case v2alpha1.TypeOperatorBundle, v2alpha1.TypeOperatorCatalog:
+		// Operator镜像使用紫色显示
+		return spinners.AddColorfulSpinner(p, spinners.ColorPurple+imageText+spinners.ColorReset)
+
+	case v2alpha1.TypeGeneric:
+		// 通用镜像使用绿色显示
+		return spinners.AddColorfulSpinner(p, spinners.ColorGreen+imageText+spinners.ColorReset)
+
+	default:
+		// 其他镜像使用默认彩色风格
+		return spinners.AddColorfulSpinner(p, imageText)
+	}
+}
+
+// 彩色增强版spinner - 方案一（已优化）
+func newColorfulSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress) *mpb.Bar {
+	imageName := path.Base(img.Origin)
+	var destination string
+	if strings.Contains(img.Destination, localStorage) {
+		destination = "cache"
+	} else {
+		destination = hostNamespace(img.Destination)
+		if len(destination) > 25 {
+			destination = destination[:22] + "..."
+		}
+	}
+
+	imageText := imageName + " → " + destination
+
+	return spinners.AddColorfulSpinner(p, imageText)
+}
+
+// 对齐美化版spinner - 方案二（已优化）
+func newAlignedSpinner(img v2alpha1.CopyImageSchema, localStorage string, p *mpb.Progress, maxImageWidth, maxDestWidth int) *mpb.Bar {
+	imageName := path.Base(img.Origin)
+	var destination string
+	if strings.Contains(img.Destination, localStorage) {
+		destination = "cache"
+	} else {
+		destination = hostNamespace(img.Destination)
+		if len(destination) > 25 {
+			destination = destination[:22] + "..."
+		}
+	}
+
+	// 计算对齐宽度时限制最大宽度
+	if len(imageName) > maxImageWidth {
+		maxImageWidth = len(imageName)
+	}
+	if len(destination) > maxDestWidth {
+		maxDestWidth = len(destination)
+	}
+
+	return spinners.AddAlignedSpinner(p, imageName, destination, "", maxImageWidth, maxDestWidth)
 }
 
 func newOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
-	return spinners.AddCleanOverallProgress(p, total)
+	// 使用彩色增强的整体进度条
+	return spinners.AddColorfulOverallProgress(p, total)
+}
+
+// 彩色增强版整体进度条 - 方案一（已优化）
+func newColorfulOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
+	return spinners.AddColorfulOverallProgress(p, total)
+}
+
+// 对齐美化版整体进度条 - 方案二（保持兼容）
+func newAlignedOverallProgress(p *mpb.Progress, total int) *mpb.Bar {
+	return spinners.AddColorfulOverallProgress(p, total)
 }
 
 func runOverallProgress(overallProgress *mpb.Bar, cancelCtx context.Context, progressCh chan int) {
@@ -412,4 +551,110 @@ func shouldSkipImage(img v2alpha1.CopyImageSchema, opts mirror.CopyOptions, errA
 	}
 
 	return false, nil
+}
+
+// 错误处理辅助函数
+
+// isNonRetryableError 判断是否为不可重试的错误
+func isNonRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// 认证错误通常不可重试
+	if strings.Contains(errStr, "unauthorized") ||
+		strings.Contains(errStr, "forbidden") ||
+		strings.Contains(errStr, "authentication") ||
+		strings.Contains(errStr, "login") {
+		return true
+	}
+
+	// 镜像不存在错误
+	if strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "does not exist") {
+		return true
+	}
+
+	// 配置错误
+	if strings.Contains(errStr, "invalid") ||
+		strings.Contains(errStr, "malformed") {
+		return true
+	}
+
+	return false
+}
+
+// isCriticalError 判断是否为关键错误
+func isCriticalError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// 网络和连接问题通常是关键错误
+	if strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "network") ||
+		strings.Contains(errStr, "dns") {
+		return true
+	}
+
+	// 存储空间问题
+	if strings.Contains(errStr, "no space") ||
+		strings.Contains(errStr, "disk full") {
+		return true
+	}
+
+	return false
+}
+
+// isNetworkError 判断是否为网络相关错误
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "network") ||
+		strings.Contains(errStr, "dns") ||
+		strings.Contains(errStr, "dial") ||
+		strings.Contains(errStr, "unreachable")
+}
+
+// isAuthError 判断是否为认证相关错误
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	return strings.Contains(errStr, "unauthorized") ||
+		strings.Contains(errStr, "forbidden") ||
+		strings.Contains(errStr, "authentication") ||
+		strings.Contains(errStr, "login") ||
+		strings.Contains(errStr, "token") ||
+		strings.Contains(errStr, "credential")
+}
+
+// writeErrorsToFile 将错误信息写入文件
+func (o *ChannelConcurrentBatch) writeErrorsToFile(errArray []mirrorErrorSchema) string {
+	if len(errArray) == 0 {
+		return ""
+	}
+
+	// 使用现有的错误保存逻辑
+	filename, err := saveErrors(o.Log, o.LogsDir, errArray)
+	if err != nil {
+		o.Log.Error("无法保存错误信息到文件: %v", err)
+		return ""
+	}
+
+	return fmt.Sprintf("%s/%s", o.LogsDir, filename)
 }
