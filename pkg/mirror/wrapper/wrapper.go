@@ -54,32 +54,41 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 
 	// 定义执行函数
 	executeFunc := func() error {
+		// 设置缓存目录，避免使用默认的 $HOME/.oc-mirror
+		// 注意：MirrorToDisk 不需要自定义 workspace，oc-mirror 会在目标目录自动创建
+		_, cacheDir, err := w.setupWorkspaceAndCache(cfg, opts.ClusterName)
+		if err != nil {
+			return fmt.Errorf("failed to setup cache directory: %v", err)
+		}
+
 		// 设置认证配置
 		authFilePath, err := w.setupAuthentication(cfg, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("设置认证配置失败: %v", err)
+			return fmt.Errorf("failed to setup authentication: %v", err)
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
 		w.log.Info("📋 Using configuration generator (based on config.toml)")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
-			return fmt.Errorf("生成镜像配置失败: %v", err)
+			return fmt.Errorf("failed to generate mirror config: %v", err)
 		}
 
 		tempConfigPath, err := w.createTempMirrorConfig(mirrorConfig, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("创建临时配置文件失败: %v", err)
+			return fmt.Errorf("failed to create temporary config file: %v", err)
 		}
 		defer os.Remove(tempConfigPath)
 
 		cmd := cli.NewMirrorCmd(w.log)
 
-		// 设置命令参数
+		// 设置Command arguments
+		// 注意：对于 mirror-to-disk 操作（目标是 file://），不需要 --workspace 参数
 		args := []string{
 			"-c", tempConfigPath,
 			"--v2",
 			"-p", strconv.Itoa(int(opts.Port)),
+			"--cache-dir", cacheDir, // 明确指定缓存目录
 			"--src-tls-verify=false",
 			"--dest-tls-verify=false",
 		}
@@ -98,12 +107,14 @@ func (w *MirrorWrapper) MirrorToDisk(cfg *config.ClusterConfig, destination stri
 		// 添加认证文件参数（如果存在）
 		if authFilePath != "" {
 			args = append(args, "--authfile", authFilePath)
-			w.log.Debug("使用认证文件: %s", authFilePath)
+			w.log.Debug("Using authentication file: %s", authFilePath)
 		}
 
 		cmd.SetArgs(args)
 
-		w.log.Debug("命令参数: %v", args)
+		w.log.Debug("Command arguments: %v", args)
+		w.log.Info("💾 Using cache: %s", cacheDir)
+		w.log.Info("📁 Mirror destination: %s", destination)
 
 		err = cmd.Execute()
 		if err != nil {
@@ -132,33 +143,41 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 
 	// 定义执行函数
 	executeFunc := func() error {
+		// 设置工作空间和缓存目录，避免使用默认的 $HOME/.oc-mirror
+		workspaceDir, cacheDir, err := w.setupWorkspaceAndCache(cfg, opts.ClusterName)
+		if err != nil {
+			return fmt.Errorf("failed to setup workspace: %v", err)
+		}
+
 		// 设置认证配置
 		authFilePath, err := w.setupAuthentication(cfg, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("设置认证配置失败: %v", err)
+			return fmt.Errorf("failed to setup authentication: %v", err)
 		}
 
 		// 优先使用内置生成的配置（从 config.toml 读取）
 		w.log.Info("📋 Using configuration generator (based on config.toml)")
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
-			return fmt.Errorf("生成镜像配置失败: %v", err)
+			return fmt.Errorf("failed to generate mirror config: %v", err)
 		}
 
 		tempConfigPath, err := w.createTempMirrorConfig(mirrorConfig, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("创建临时配置文件失败: %v", err)
+			return fmt.Errorf("failed to create temporary config file: %v", err)
 		}
 		defer os.Remove(tempConfigPath)
 
 		cmd := cli.NewMirrorCmd(w.log)
 
-		// 设置命令参数
+		// 设置Command arguments
 		args := []string{
 			"-c", tempConfigPath,
 			"--v2",
 			"-p", strconv.Itoa(int(opts.Port)),
 			"--from", source,
+			"--workspace", workspaceDir, // 明确指定工作空间
+			"--cache-dir", cacheDir, // 明确指定缓存目录
 			"--src-tls-verify=false",
 			"--dest-tls-verify=false",
 		}
@@ -166,7 +185,7 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 		// 添加认证文件参数（如果存在）
 		if authFilePath != "" {
 			args = append(args, "--authfile", authFilePath)
-			w.log.Debug("使用认证文件: %s", authFilePath)
+			w.log.Debug("Using authentication file: %s", authFilePath)
 		}
 
 		if opts.DryRun {
@@ -182,7 +201,9 @@ func (w *MirrorWrapper) DiskToMirror(cfg *config.ClusterConfig, source, destinat
 
 		cmd.SetArgs(args)
 
-		w.log.Debug("命令参数: %v", args)
+		w.log.Debug("Command arguments: %v", args)
+		w.log.Info("💾 Using workspace: %s", workspaceDir)
+		w.log.Info("💾 Using cache: %s", cacheDir)
 
 		err = cmd.Execute()
 		if err != nil {
@@ -211,27 +232,39 @@ func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, desti
 
 	// 定义执行函数
 	executeFunc := func() error {
+		// 设置工作空间和缓存目录，避免使用默认的 $HOME/.oc-mirror
+		workspaceDir, cacheDir, err := w.setupWorkspaceAndCache(cfg, opts.ClusterName)
+		if err != nil {
+			return fmt.Errorf("failed to setup workspace: %v", err)
+		}
+
 		// 生成 oc-mirror 配置
 		mirrorConfig, err := w.generateMirrorConfig(cfg)
 		if err != nil {
-			return fmt.Errorf("生成镜像配置失败: %v", err)
+			return fmt.Errorf("failed to generate mirror config: %v", err)
 		}
 
 		// 创建临时配置文件
 		tempConfigPath, err := w.createTempMirrorConfig(mirrorConfig, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("创建临时配置文件失败: %v", err)
+			return fmt.Errorf("failed to create temporary config file: %v", err)
 		}
 		defer os.Remove(tempConfigPath)
 
 		cmd := cli.NewMirrorCmd(w.log)
 
-		// 设置命令参数
+		// 如果用户提供了workspace参数，使用用户的，否则使用我们计算的
+		if workspace == "" {
+			workspace = workspaceDir
+		}
+
+		// 设置Command arguments
 		args := []string{
 			"-c", tempConfigPath,
 			"--v2",
 			"-p", strconv.Itoa(int(opts.Port)),
 			"--workspace", workspace,
+			"--cache-dir", cacheDir, // 明确指定缓存目录
 			"--src-tls-verify=false",
 			"--dest-tls-verify=false",
 		}
@@ -239,11 +272,11 @@ func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, desti
 		// 添加认证文件参数（如果存在）
 		authFilePath, err := w.setupAuthentication(cfg, opts.ClusterName)
 		if err != nil {
-			return fmt.Errorf("设置认证配置失败: %v", err)
+			return fmt.Errorf("failed to setup authentication: %v", err)
 		}
 		if authFilePath != "" {
 			args = append(args, "--authfile", authFilePath)
-			w.log.Debug("使用认证文件: %s", authFilePath)
+			w.log.Debug("Using authentication file: %s", authFilePath)
 		}
 
 		if opts.DryRun {
@@ -259,7 +292,9 @@ func (w *MirrorWrapper) MirrorDirect(cfg *config.ClusterConfig, workspace, desti
 
 		cmd.SetArgs(args)
 
-		w.log.Debug("命令参数: %v", args)
+		w.log.Debug("Command arguments: %v", args)
+		w.log.Info("💾 Using workspace: %s", workspace)
+		w.log.Info("💾 Using cache: %s", cacheDir)
 
 		err = cmd.Execute()
 		if err != nil {
@@ -350,7 +385,7 @@ func (w *MirrorWrapper) createTempMirrorConfig(config *v2alpha1.ImageSetConfigur
 	// 创建临时目录
 	tempDir := filepath.Join(os.TempDir(), "ocpack-mirror", clusterName)
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return "", fmt.Errorf("创建临时目录失败: %v", err)
+		return "", fmt.Errorf("failed to create temporary directory: %v", err)
 	}
 
 	// 创建配置文件路径
@@ -583,7 +618,7 @@ func (w *MirrorWrapper) setupAuthentication(cfg *config.ClusterConfig, clusterNa
 	// 获取当前工作目录
 	workingDir, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("获取工作目录失败: %v", err)
+		return "", fmt.Errorf("failed to get working directory: %v", err)
 	}
 
 	clusterDir := filepath.Join(workingDir, clusterName)
@@ -639,7 +674,7 @@ func (w *MirrorWrapper) setupAuthentication(cfg *config.ClusterConfig, clusterNa
 	// 创建registry目录
 	registryDir := filepath.Dir(mergedAuthPath)
 	if err := os.MkdirAll(registryDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 registry 目录失败: %v", err)
+		return "", fmt.Errorf("failed to create registry directory: %v", err)
 	}
 
 	// 保存合并认证文件
@@ -658,4 +693,185 @@ func (w *MirrorWrapper) setupAuthentication(cfg *config.ClusterConfig, clusterNa
 	}
 
 	return mergedAuthPath, nil
+}
+
+// setupWorkspaceAndCache 设置工作空间和缓存目录，避免使用默认的 $HOME/.oc-mirror
+func (w *MirrorWrapper) setupWorkspaceAndCache(cfg *config.ClusterConfig, clusterName string) (string, string, error) {
+	// 获取当前工作目录，确保在当前项目目录内创建文件
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get current working directory: %v", err)
+	}
+
+	// 确定集群目录，优先使用配置中的 ClusterID，否则使用传入的 clusterName
+	clusterID := cfg.ClusterInfo.ClusterID
+	if clusterID == "" {
+		clusterID = clusterName
+	}
+
+	// 构建完整的集群目录路径
+	clusterDir := filepath.Join(currentDir, clusterID)
+
+	// 设置工作空间目录（在集群目录内）
+	workspaceDir := filepath.Join(clusterDir, "images", "working-dir")
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create workspace directory: %v", err)
+	}
+
+	// 设置缓存目录（在集群目录内）
+	cacheDir := filepath.Join(clusterDir, "images", "cache")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create cache directory: %v", err)
+	}
+
+	// 获取绝对路径，确保 oc-mirror 能正确识别
+	workspaceAbsPath, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get workspace absolute path: %v", err)
+	}
+
+	cacheAbsPath, err := filepath.Abs(cacheDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get cache directory absolute path: %v", err)
+	}
+
+	// 将路径转换为 file:// 格式（oc-mirror 工作空间要求）
+	workspacePath := "file://" + workspaceAbsPath
+	cachePath := cacheAbsPath // cache-dir 不需要 file:// 前缀
+
+	w.log.Info("📁 Workspace directory: %s", workspaceAbsPath)
+	w.log.Info("💾 Cache directory: %s", cacheAbsPath)
+	w.log.Debug("oc-mirror workspace parameter: %s", workspacePath)
+	w.log.Debug("oc-mirror cache-dir parameter: %s", cachePath)
+
+	return workspacePath, cachePath, nil
+}
+
+// CleanCache 清理指定集群的缓存目录
+func (w *MirrorWrapper) CleanCache(cfg *config.ClusterConfig, clusterName string) error {
+	// 获取当前工作目录
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current working directory: %v", err)
+	}
+
+	// 确定集群目录
+	clusterID := cfg.ClusterInfo.ClusterID
+	if clusterID == "" {
+		clusterID = clusterName
+	}
+
+	clusterDir := filepath.Join(currentDir, clusterID)
+	cacheDir := filepath.Join(clusterDir, "images", "cache")
+
+	// 检查缓存目录是否存在
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		w.log.Info("ℹ️  Cache directory does not exist: %s", cacheDir)
+		return nil
+	}
+
+	// 计算缓存大小
+	size, err := w.calculateDirectorySize(cacheDir)
+	if err != nil {
+		w.log.Warn("⚠️  Failed to calculate cache size: %v", err)
+	} else {
+		w.log.Info("📊 Current cache size: %s", w.formatBytes(size))
+	}
+
+	w.log.Info("🧹 Cleaning cache directory: %s", cacheDir)
+
+	// 删除缓存目录内容
+	err = os.RemoveAll(cacheDir)
+	if err != nil {
+		return fmt.Errorf("failed to clean cache directory: %v", err)
+	}
+
+	w.log.Info("✅ Cache cleaned successfully")
+	return nil
+}
+
+// GetCacheInfo 获取缓存信息，包括大小和位置
+func (w *MirrorWrapper) GetCacheInfo(cfg *config.ClusterConfig, clusterName string) (map[string]interface{}, error) {
+	// 获取当前工作目录
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current working directory: %v", err)
+	}
+
+	// 确定集群目录
+	clusterID := cfg.ClusterInfo.ClusterID
+	if clusterID == "" {
+		clusterID = clusterName
+	}
+
+	clusterDir := filepath.Join(currentDir, clusterID)
+	cacheDir := filepath.Join(clusterDir, "images", "cache")
+	workspaceDir := filepath.Join(clusterDir, "images", "working-dir")
+
+	info := map[string]interface{}{
+		"cluster_id":    clusterID,
+		"cache_dir":     cacheDir,
+		"workspace_dir": workspaceDir,
+	}
+
+	// 检查缓存目录
+	if stat, err := os.Stat(cacheDir); err == nil {
+		size, err := w.calculateDirectorySize(cacheDir)
+		if err == nil {
+			info["cache_size_bytes"] = size
+			info["cache_size_human"] = w.formatBytes(size)
+		}
+		info["cache_exists"] = true
+		info["cache_modified"] = stat.ModTime()
+	} else {
+		info["cache_exists"] = false
+		info["cache_size_bytes"] = 0
+		info["cache_size_human"] = "0 B"
+	}
+
+	// 检查工作空间目录
+	if stat, err := os.Stat(workspaceDir); err == nil {
+		size, err := w.calculateDirectorySize(workspaceDir)
+		if err == nil {
+			info["workspace_size_bytes"] = size
+			info["workspace_size_human"] = w.formatBytes(size)
+		}
+		info["workspace_exists"] = true
+		info["workspace_modified"] = stat.ModTime()
+	} else {
+		info["workspace_exists"] = false
+		info["workspace_size_bytes"] = 0
+		info["workspace_size_human"] = "0 B"
+	}
+
+	return info, nil
+}
+
+// calculateDirectorySize 计算目录大小
+func (w *MirrorWrapper) calculateDirectorySize(dirPath string) (int64, error) {
+	var size int64
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
+// formatBytes 格式化字节数为人类可读格式
+func (w *MirrorWrapper) formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
